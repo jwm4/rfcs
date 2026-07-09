@@ -192,6 +192,42 @@ analyze how skills were used during an agent run.
        --alias production --version 2.0.0
    ```
 
+## Compare agent performance with and without a skill
+
+A common evaluation scenario is measuring the impact of adding or
+removing a skill from an agent's configuration. This uses the same
+evaluation infrastructure as version comparison, but one experiment
+runs the agent without the skill installed.
+
+1. Run the agent without the skill on a set of test inputs. Traces
+   are recorded in MLflow under experiment A (baseline).
+2. Install the skill:
+   ```bash
+   mlflow skills install --name code-review --alias production \
+       --harness claude-code
+   ```
+3. Run the same agent on the same test inputs. Traces are recorded
+   under experiment B. Skill invocations appear as SKILL spans in
+   the traces.
+4. Use `mlflow.genai.evaluate()` with the same scorers on both
+   experiments:
+   ```python
+   baseline_results = mlflow.genai.evaluate(
+       data=baseline_traces, scorers=scorers,
+   )
+   skill_results = mlflow.genai.evaluate(
+       data=skill_traces, scorers=scorers,
+   )
+   ```
+5. Compare the evaluation results side by side in the MLflow UI.
+   The SKILL spans in experiment B's traces confirm which skill
+   version was active during each run, enabling attribution of any
+   quality differences.
+
+The same pattern works for comparing different skill sets: install
+bundle A for one experiment, bundle B for another, and evaluate
+both against the same inputs and scorers.
+
 ## Trace skill lineage to evaluation results
 
 After running evaluations, a user wants to know which registered
