@@ -192,6 +192,54 @@ analyze how skills were used during an agent run.
        --alias production --version 2.0.0
    ```
 
+## Trace skill lineage to evaluation results
+
+After running evaluations, a user wants to know which registered
+skill version was active during a traced agent run. The lineage
+path flows through traces: evaluation results link to traces, and
+traces contain SKILL spans annotated with registry coordinates.
+
+1. Run an agent with installed skills. Skill invocations produce
+   SKILL spans in the recorded traces (see
+   [Trace integration](#trace-integration)).
+2. Run evaluation against the collected traces:
+   ```python
+   results = mlflow.genai.evaluate(
+       data=traces_df,
+       scorers=[correctness_scorer, helpfulness_scorer],
+   )
+   ```
+   Each row in `results.result_df` includes a `trace_id` linking
+   the evaluation result back to its source trace.
+3. Find which skill versions were used in a specific evaluation
+   result:
+   ```python
+   trace = mlflow.get_trace(trace_id)
+   skill_spans = trace.search_spans(span_type="SKILL")
+   for span in skill_spans:
+       print(span.attributes["mlflow.skill.name"],
+             span.attributes["mlflow.skill.version"])
+   ```
+4. Find all traces that used a specific skill version:
+   ```python
+   traces = mlflow.search_traces(
+       experiment_ids=[experiment_id],
+       filter_string=(
+           'span.type = "SKILL"'
+           ' AND span.attributes.mlflow.skill.name = "code-review"'
+           ' AND span.attributes.mlflow.skill.version = "1.0.0"'
+       ),
+   )
+   ```
+   Evaluation results for these traces can then be retrieved via
+   their `trace_id` values.
+
+This two-step approach (query traces by skill attributes, then
+retrieve associated evaluation results) works with the existing
+MLflow tracing and evaluation APIs. Richer integration, such as
+filtering evaluation results directly by skill version, is
+follow-up work (see [Adoption strategy](#adoption-strategy)).
+
 ## CI pipeline for automated regression detection
 
 1. A CI job (e.g., GitHub Actions) triggers on pushes to the skill
@@ -824,4 +872,4 @@ New feature, not a breaking change. Phased rollout:
 
 - **Phase 1 (this RFC):** Registry entities (Skill, Subagent, Hook, SkillBundle), store, REST API, SDK, CLI, UI, `mlflow skills pull`, and `mlflow.skill_context()` for trace integration.
 - **Phase 2 (RFC-0009):** Harness-specific `mlflow skills install` / `install-bundle` for Claude Code, Codex CLI, and Cursor. Automatic `skill_context()` wrapping in harness-specific autologgers.
-- **Phase 3 (follow-up):** Usage analytics dashboards, install count tracking, cross-workspace export/import (following cross-registry patterns), and shared base extraction with the MCP registry.
+- **Phase 3 (follow-up):** Usage analytics dashboards, install count tracking, cross-workspace export/import (following cross-registry patterns), shared base extraction with the MCP registry, and richer evaluation-to-skill query integration (e.g., filtering evaluation results directly by skill version attributes).
