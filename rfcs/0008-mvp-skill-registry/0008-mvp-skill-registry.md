@@ -3,7 +3,7 @@
 | start_date   | 2026-04-22 |
 | :----------- | :--------- |
 | mlflow_issue | https://github.com/mlflow/mlflow/issues/22833 |
-| rfc_pr       | |
+| rfc_pr       | https://github.com/mlflow/rfcs/pull/26 |
 
 | Author(s)              | [Bill Murdock](https://github.com/jwm4) (Red Hat) |
 | :--------------------- | :-- |
@@ -52,8 +52,7 @@ inspecting bundled Assistant skills. The registry subcommands
 none of the new subcommand names conflict with the existing ones.
 See [implementation-details.md: Python SDK and
 CLI](implementation-details.md#python-sdk-and-cli) for details.
-
-The two entity types:
+The two entity types are:
 
 - **Skills**: a directory containing a SKILL.md entry point plus
   supporting files (scripts, templates, reference material)
@@ -76,8 +75,8 @@ Both paths annotate spans with registry coordinates, enabling adoption
 tracking, deprecation impact analysis, per-skill cost attribution, and
 regression detection.
 
-A follow-up RFC (RFC-0009) will extend skill bundles to include
-non-skill members (subagents, hooks, MCP server references).
+A follow-up RFC will extend skill bundles to include
+non-skill members (e.g., subagents, MCP server references).
 
 # Basic example
 
@@ -470,10 +469,10 @@ discovery/search operations.
 
 ### Out of scope
 
-- **Non-skill entity types.** Subagent definitions, hooks, and MCP
-  server references are deferred to a follow-up RFC (RFC-0009) that
-  will extend skill bundles with non-skill members. The registry
-  backend is designed to be extensible to these types.
+- **Non-skill entity types.** Non-skill members (e.g., subagent
+  definitions, MCP server references) are deferred to a follow-up RFC
+  that will extend skill bundles. The registry backend is designed to
+  be extensible to these types.
 - **Artifact storage as the only path.** The registry supports both
   external source pointers (Git, OCI, ZIP) and direct artifact storage
   (`source_type="mlflow"`). However, it is not an artifact-only store;
@@ -563,9 +562,9 @@ members), and direct mapping to the harness plugin concept. Follows
 the same top-level pattern as Skill: versions, tags, aliases, and
 derived status.
 
-A follow-up RFC (RFC-0009) will extend skill bundles to include
-non-skill members (subagent definitions, hooks, and MCP server
-references from RFC-0004), enabling full "plugin"-style bundles.
+A follow-up RFC will extend skill bundles to include non-skill
+members (e.g., subagents, MCP server references), enabling full
+"plugin"-style bundles.
 The member table schema includes a `member_type` field for forward
 compatibility with this extension.
 
@@ -990,8 +989,8 @@ skills and skills-only bundles into concrete skill sources or local
 paths, then passes those skills to an existing package manager for
 installation. Phase 1 does not define a generic adapter that translates
 MLflow bundle definitions into downstream bundle formats. Translation
-of richer bundles containing subagents, hooks, or MCP server references
-is deferred to RFC-0009 together with those non-skill member types.
+of richer bundles containing non-skill members (e.g., subagents, MCP
+server references) is deferred to the follow-up RFC.
 
 #### Installation commands
 
@@ -1226,9 +1225,8 @@ New feature, not a breaking change. Phased rollout:
   `mlflow.skill_context()` for manual trace integration, the install-time
   trace manifest, and automatic SKILL spans in the Claude Code
   autologger.
-- **Phase 2 (RFC-0009):** Extend skill bundles with non-skill
-  members: subagent definitions, hooks, and MCP server references
-  (cross-registry with RFC-0004).
+- **Phase 2 (follow-up RFC):** Extend skill bundles with non-skill
+  members (e.g., subagents, MCP server references).
 - **Phase 3 (follow-up):** Usage analytics dashboards, install count
   tracking, cross-workspace export/import (following cross-registry
   patterns), shared base extraction with the MCP registry, and richer

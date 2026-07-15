@@ -152,9 +152,9 @@ FK: `(workspace, bundle_name, bundle_version)` references
 with RESTRICT delete.
 
 The `member_type` column is included for forward compatibility with
-RFC-0009, which will extend bundles to include non-skill members
-(subagent definitions, hooks, MCP server references). In this RFC,
-all members have `member_type='skill'`.
+a follow-up RFC that will extend bundles to include non-skill members
+(e.g., subagents, MCP server references). In this RFC, all members
+have `member_type='skill'`.
 
 ### `skill_bundle_tags`
 
@@ -1446,7 +1446,7 @@ In Phase 1, these plugins receive only resolved skills or skills-only
 bundle members. They install those skills using an existing package
 manager, but they do not translate MLflow bundle definitions into
 downstream bundle formats. Generic translation for bundles containing
-non-skill members is deferred to RFC-0009.
+non-skill members is deferred to the follow-up RFC.
 
 Both `mlflow skills install` and `mlflow skills install-bundle` require
 a package manager plugin. The caller can select a plugin explicitly, or
