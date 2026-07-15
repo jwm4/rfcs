@@ -7,8 +7,8 @@
 
 | Author(s)              | [Bill Murdock](https://github.com/jwm4) (Red Hat) |
 | :--------------------- | :-- |
-| **Date Last Modified** | 2026-07-13 |
-| **AI Assistant(s)**    | Claude Code |
+| **Date Last Modified** | 2026-07-14 |
+| **AI Assistant(s)**    | Claude Code, Codex |
 
 **Table of contents**
 
@@ -21,6 +21,7 @@
 - [Detailed design](#detailed-design)
   - [Entities and data model](#entities-and-data-model)
   - [Status and lifecycle](#status-and-lifecycle)
+  - [Plugin import](#plugin-import)
   - [Pull semantics](#pull-semantics)
   - [Workspace scoping](#workspace-scoping)
   - [Permissions](#permissions)
@@ -41,9 +42,10 @@ primary design is metadata-first. It provides enterprise governance
 on top of existing distribution mechanisms: lifecycle management,
 usage analytics via traces, and federated discovery across sources.
 
-The registry manages two entity types under the `mlflow.genai.skills`
-SDK namespace (CLI: `mlflow skills`), each with full lifecycle
-(versioning, aliases, tags, status). Note: MLflow already has an
+The registry manages two entity types under the `mlflow.genai` SDK
+namespace (CLI: `mlflow skills`), following the top-level public SDK
+pattern established by the MCP Server Registry (RFC-0004). Each has
+full lifecycle (versioning, aliases, tags, status). Note: MLflow already has an
 `mlflow skills` CLI group with `list` and `view` subcommands for
 inspecting bundled Assistant skills. The registry subcommands
 (`register`, `pull`, `install`, etc.) extend this existing group;
@@ -62,11 +64,17 @@ The two entity types:
 registered content from its source. Harness-specific installation
 delegates to package managers (APM, Lola, or others via a plugin
 interface) that already support cross-harness skill installation.
+Existing Claude Code plugins can be imported as monolithic skills-only
+bundles: MLflow registers their discovered skills, preserves the plugin
+source, and warns about non-skill content that Phase 1 does not register.
 
-`mlflow.skill_context()` closes the observability loop by creating
-SKILL spans in MLflow traces, annotated with registry coordinates,
-enabling adoption tracking, deprecation impact analysis, per-skill
-cost attribution, and regression detection.
+Trace integration supports both manual and automatic instrumentation.
+`mlflow.skill_context()` lets SDK applications create SKILL spans
+explicitly. For installed skills, the Phase 1 Claude Code autologger
+uses the install-time trace manifest to create SKILL spans automatically.
+Both paths annotate spans with registry coordinates, enabling adoption
+tracking, deprecation impact analysis, per-skill cost attribution, and
+regression detection.
 
 A follow-up RFC (RFC-0009) will extend skill bundles to include
 non-skill members (subagents, hooks, MCP server references).
@@ -78,7 +86,7 @@ non-skill members (subagents, hooks, MCP server references).
 ```python
 import mlflow
 
-mlflow.genai.skills.register_skill(
+mlflow.genai.register_skill(
     name="code-review",
     version="1.0.0",
     description="Reviews pull requests for correctness, style, and security",
@@ -91,9 +99,9 @@ mlflow.genai.skills.register_skill(
 ## Create a skill bundle
 
 ```python
-from mlflow.genai.skills import SkillMemberRef
+from mlflow.genai import SkillMemberRef
 
-mlflow.genai.skills.create_skill_bundle_version(
+mlflow.genai.create_skill_bundle_version(
     name="pr-workflow",
     version="1.0.0",
     skills=[
@@ -103,13 +111,29 @@ mlflow.genai.skills.create_skill_bundle_version(
 )
 ```
 
+## Import an existing plugin
+
+```bash
+mlflow skills import \
+    --source https://github.com/acme/plugins.git@v1.0.0 \
+    --subpath pr-workflow \
+    --plugin-format claude-code \
+    --bundle-name pr-workflow \
+    --version 1.0.0
+```
+
+MLflow discovers and registers the plugin's skills as members of a
+monolithic bundle. It preserves the Git source on the bundle and warns
+about subagents, hooks, and MCP configurations that are not registered
+in Phase 1.
+
 ## Install and use
 
 ```bash
 # Install a skill bundle for Claude Code via a package manager
 mlflow skills install-bundle --name pr-workflow --alias production
 
-# Or install a single skill directly (file download)
+# Or install a single skill through the same package-manager layer
 mlflow skills install --name code-review --alias production \
     --harness claude-code
 ```
@@ -179,7 +203,7 @@ Registry enables. Each shows both CLI and UI paths.
    ```python
    import mlflow
 
-   mlflow.genai.skills.register_skill(
+   mlflow.genai.register_skill(
        name="code-review",
        version="1.0.0",
        description="Reviews pull requests for correctness, style, and security",
@@ -212,6 +236,30 @@ Registry enables. Each shows both CLI and UI paths.
    ```
    **UI path:** In the bundle detail page, click "Add Alias" and map
    `production` to version `1.0.0`.
+
+#### Import an existing plugin as a skills-only bundle
+
+1. Import a Claude Code plugin from a remotely accessible source:
+   ```bash
+   mlflow skills import \
+       --source https://github.com/acme/plugins.git@v1.0.0 \
+       --subpath pr-workflow \
+       --plugin-format claude-code \
+       --bundle-name pr-workflow \
+       --version 1.0.0
+   ```
+2. MLflow fetches the plugin in the client environment and discovers
+   directories containing SKILL.md entry points.
+3. MLflow registers each discovered skill as an embedded, source-less
+   skill version and records its path as `member_subpath` in a new
+   monolithic bundle version. The bundle retains the original plugin
+   source pointer.
+4. If the plugin also contains subagents, hooks, or MCP configuration,
+   MLflow skips those elements and prints a warning that Phase 1
+   registers skills only.
+5. The created bundle and skills are available through the same
+   discovery, lifecycle, pull, and installation flows as manually
+   registered entries.
 
 #### Discover a skill for a specific purpose
 
@@ -253,7 +301,7 @@ Registry enables. Each shows both CLI and UI paths.
    content, delegates to the configured package manager (e.g., APM
    or Lola) for harness-specific installation, and writes a trace
    manifest (`mlflow-skills-manifest.json`) with installed registry
-   coordinates. For direct installation without a package manager:
+   coordinates. A single skill uses the same package-manager layer:
    ```bash
    mlflow skills install --name code-review --alias production \
        --harness claude-code
@@ -497,6 +545,11 @@ new version. The optional `subpath` field identifies content within a
 shared artifact (used with Git, OCI, and ZIP). The optional
 `content_digest` field enables integrity verification.
 
+`register_skill()` creates the parent Skill when needed and otherwise
+reuses the existing parent. If the target `(name, version)` already
+exists, registration fails with an error. This matches the MCP Server
+Registry behavior (`register_mcp_server()` in mlflow/mlflow#23696).
+
 #### SkillBundle
 
 A skill bundle groups related skills into a governed unit that maps
@@ -527,10 +580,9 @@ one of two kinds:
 - **Monolithic:** has its own source pointer (e.g., a single OCI
   image or Git repo containing multiple skills) and member
   references. Skill member versions may omit their own sources when
-  their content lives inside the bundle artifact; the optional
-  `member_subpath` on each membership identifies where the member
-  lives inside the bundle artifact. `pull` fetches the bundle
-  artifact as a unit.
+  their content lives inside the bundle artifact. A source-less member
+  must provide `member_subpath` to identify where it lives inside the
+  bundle artifact. `pull` fetches the bundle artifact as a unit.
 
 A bundle version cannot have both a bundle-level source and skill
 member versions with their own sources. This avoids confusion about
@@ -632,7 +684,51 @@ alias="latest", ...)` is rejected, while
 `get_skill_version_by_alias(..., alias="latest")` is treated as a
 convenience alias for `get_latest_skill_version(...)`.
 
+The same rule applies to skill bundles:
+`set_skill_bundle_alias(..., alias="latest", ...)` is rejected, while
+`get_skill_bundle_version_by_alias(..., alias="latest")` delegates to
+`get_latest_skill_bundle_version(...)`.
+
 This aligns with the MCP Server Registry (RFC-0004).
+
+### Plugin import
+
+`mlflow skills import` is a client-side convenience operation for
+registering an existing harness-specific plugin as a monolithic
+skills-only bundle. Phase 1 supports the Claude Code plugin layout.
+Additional input formats can be added later without changing the
+registry data model.
+
+Before importing, users can call `mlflow skills introspect` or the SDK
+`introspect_bundle()` function to preview the skills and skipped content
+that MLflow discovers. Introspection is read-only, accepts either a local
+path or a remotely accessible source, and does not create registry
+records. Import still requires a remote source so the registered bundle
+retains a pullable source pointer.
+
+The client fetches the plugin from a Git, OCI, ZIP, or MLflow artifact
+source and inspects it locally. It discovers directories containing a
+SKILL.md entry point, creates embedded skill versions without individual
+source pointers, and records each directory as the membership
+`member_subpath`. It then creates a monolithic bundle version whose
+source fields preserve the original plugin location.
+
+Subagents, hooks, MCP configurations, and other non-skill content remain
+in the source artifact but are not registered as entities or members in
+Phase 1. The import result reports a warning for each skipped category.
+Import does not install the plugin, generate a downstream manifest, or
+translate an MLflow bundle into another bundle format.
+
+The bundle version must have a valid semantic version, supplied by the
+caller or read from supported plugin metadata. Embedded skills use the
+bundle version. Import never overwrites or reuses an existing skill or
+bundle version. The client checks for naming and version conflicts
+before creating registry records and fails the import if any target
+`(name, version)` already exists.
+
+See [implementation-details.md: Plugin
+import](implementation-details.md#plugin-import) for the SDK return
+type, CLI mapping, discovery rules, and conflict behavior.
 
 ### Pull semantics
 
@@ -821,13 +917,36 @@ produces a skill stack in the trace tree:
 Walking up the ancestor chain and collecting SKILL spans reconstructs
 the skill stack for any span.
 
-#### Autologger compatibility
+#### Framework autologger compatibility
 
 Because `skill_context()` creates a standard MLflow span, it works
-with existing autologgers without modification. When an autologger
-(Claude, LangChain, OpenAI, etc.) creates a span inside a
-`skill_context()` block, that span automatically becomes a child of
-the SKILL span. No changes to the autologgers are needed.
+with existing framework autologgers without modification. When a
+framework autologger (LangChain, OpenAI, Anthropic, etc.) creates a span
+inside a `skill_context()` block, that span automatically becomes a
+child of the SKILL span.
+
+#### Automatic harness instrumentation
+
+Phase 1 extends the Claude Code autologger to recognize skill
+invocations and create SKILL spans automatically. The autologger reads
+the `mlflow-skills-manifest.json` written during installation, maps the
+harness-local skill name to its registered `{workspace, name, version}`
+coordinates, and creates a SKILL span around the invocation. LLM and
+tool spans produced while the skill is active become children of that
+span.
+
+Automatic instrumentation runs in the process that owns the active
+trace, so it can preserve correct parent-child relationships without
+cross-process trace correlation. It does not perform a registry lookup
+during invocation. A missing, malformed, or unmatched manifest entry
+does not interrupt the agent run or other autologging; it only prevents
+creation of a registry-linked SKILL span for that invocation.
+
+The manifest and instrumentation contract are harness-neutral so other
+harness autologgers can adopt them later, but Claude Code integration is
+the automatic tracing implementation delivered in Phase 1. See
+[implementation-details.md: Automatic trace
+instrumentation](implementation-details.md#automatic-trace-instrumentation).
 
 #### Registry validation
 
@@ -866,23 +985,47 @@ installation. This avoids duplicating work that projects like
 [Lola](https://github.com/LobsterTrap/lola) already handle well, and
 lets the MLflow community benefit from their evolving harness support.
 
-#### Two installation paths
+The Phase 1 plugin boundary is intentionally narrow. MLflow resolves
+skills and skills-only bundles into concrete skill sources or local
+paths, then passes those skills to an existing package manager for
+installation. Phase 1 does not define a generic adapter that translates
+MLflow bundle definitions into downstream bundle formats. Translation
+of richer bundles containing subagents, hooks, or MCP server references
+is deferred to RFC-0009 together with those non-skill member types.
 
-The registry supports two installation paths:
+#### Installation commands
 
-1. **Direct install** (`mlflow skills install`): a simple file
-   download that places skill content in a harness-specific directory.
-   This handles the common case of installing a single skill from any
-   supported source type. The `--harness` flag determines the target
-   directory (e.g., `.claude/skills/` for Claude Code,
-   `.cursor/skills/` for Cursor).
+Both harness-aware installation commands delegate to a configured
+package manager plugin:
 
-2. **Package manager install** (`mlflow skills install-bundle`): for
-   bundles or when full harness-specific manifest generation is
-   needed. MLflow resolves registry metadata, pulls content from
-   MLflow-specific sources (artifact store, OCI) to local paths, and
-   delegates to a configured package manager plugin for
-   harness-specific installation.
+1. **Single-skill install** (`mlflow skills install`): MLflow resolves
+   one registered skill and materializes its content locally, then calls
+   the plugin's `install_skill()` operation.
+
+2. **Bundle install** (`mlflow skills install-bundle`): MLflow resolves
+   a skills-only bundle and materializes its members locally, then calls
+   the plugin's `install_bundle()` operation.
+
+MLflow owns registry and source resolution plus the trace manifest. The
+package manager owns all harness-specific behavior, including directory
+placement and any package-manager or harness manifest generation. Users
+can request a target harness through MLflow, which passes that selection
+to the plugin. Users who only want to download content without installing
+it into a harness use the package-manager-free `mlflow skills pull`
+command.
+
+Two package-manager integration details require follow-up investigation
+before the Phase 1 installation contract is finalized:
+
+- **Harness selection:** Determine whether APM and Lola can reliably
+  detect the target harness when the caller does not specify one. If the
+  selected package managers provide this behavior, MLflow can leave the
+  harness argument optional; otherwise the installation commands must
+  require an explicit target harness.
+- **Reproducible installation:** Determine what lock-file or equivalent
+  reproducibility support APM and Lola provide. Based on those findings,
+  decide whether MLflow should rely on package-manager-owned lock data,
+  generate an intermediate install recipe, or define its own lock file.
 
 #### Package manager plugin interface
 
@@ -926,26 +1069,30 @@ When `mlflow skills install-bundle` is invoked:
 
 1. MLflow resolves the bundle version from the registry (by name +
    version or alias).
-2. For each member skill, MLflow pulls content to a local temporary
-   directory using the same source-type-aware logic as
-   `mlflow skills pull`.
-3. MLflow passes the local paths to the configured package manager
-   plugin, which handles harness-specific directory placement and
-   manifest generation.
+2. MLflow materializes a local path for each member skill according to
+   the bundle kind:
+   - For an assembled bundle, MLflow pulls each member from its own
+     source to a local temporary directory.
+   - For a monolithic bundle, MLflow pulls the bundle source once and
+     resolves each member path from the pulled bundle root and the
+     member's `member_subpath`.
+3. MLflow passes the resulting skill-name-to-local-path mapping to the
+   configured package manager plugin, which handles harness-specific
+   directory placement and manifest generation.
 4. MLflow writes the `mlflow-skills-manifest.json` trace manifest
    with installed registry coordinates.
 
-For Git-backed skills, the package manager can also fetch directly
-from Git (APM and Lola both support Git sources natively). In this
-case, MLflow can provide the Git coordinates from the registry
-metadata and let the package manager handle the fetch, avoiding a
-redundant local pull.
+When `mlflow skills install` is invoked for a single skill, MLflow
+resolves the version, pulls its content to a local temporary directory,
+passes that path to the configured plugin's `install_skill()` operation,
+and writes the trace manifest after installation succeeds.
 
 #### Trace manifest
 
-Both installation paths write an `mlflow-skills-manifest.json` file
-that records installed registry coordinates. This manifest enables
-automatic SKILL span creation by harness autologgers:
+Both installation commands write an `mlflow-skills-manifest.json` file
+that records installed registry coordinates. In Phase 1, the Claude
+Code autologger consumes this manifest for automatic SKILL span
+creation:
 
 ```json
 {
@@ -965,6 +1112,14 @@ automatic SKILL span creation by harness autologgers:
 }
 ```
 
+Project-scoped installs write the manifest at the project root.
+User-scoped installs write it in the MLflow user configuration
+directory. Project entries take precedence over user entries with the
+same harness-local skill name. See [implementation-details.md:
+Automatic trace
+instrumentation](implementation-details.md#automatic-trace-instrumentation)
+for discovery, matching, span lifecycle, and failure behavior.
+
 ### Implementation details
 
 Database schema (table definitions), store interface (method
@@ -981,11 +1136,21 @@ in [implementation-details.md](implementation-details.md).
   `source_type="mlflow"` to store content directly in MLflow artifact
   storage.
 
+- **Artifact upload atomicity.** Client-side artifact upload and skill
+  version creation are separate operations. The client performs
+  best-effort cleanup when version creation fails, but an artifact
+  backend without deletion support can retain unreferenced uploaded
+  files until garbage collection.
+
 - **Package manager dependency.** Full harness-specific installation
   requires a package manager plugin (APM, Lola, or similar). Users
-  who do not install a package manager can still use direct install
-  (`mlflow skills install`) for single skills, and `mlflow skills
+  who do not install a package manager can still use `mlflow skills
   pull` for harness-agnostic content download.
+
+- **Automatic tracing coverage.** Phase 1 automatic instrumentation is
+  implemented for Claude Code. Other harnesses can use manual
+  `skill_context()` instrumentation until their autologgers adopt the
+  manifest contract.
 
 # Alternatives
 
@@ -1056,8 +1221,11 @@ New feature, not a breaking change. Phased rollout:
 
 - **Phase 1 (this RFC):** Skill and SkillBundle entities, store,
   REST API, SDK, CLI, UI, `mlflow skills pull`,
-  `mlflow skills install` (direct), package manager plugin interface,
-  and `mlflow.skill_context()` for trace integration.
+  skills-only plugin import, package-manager-backed single-skill and
+  bundle installation, the package manager plugin interface,
+  `mlflow.skill_context()` for manual trace integration, the install-time
+  trace manifest, and automatic SKILL spans in the Claude Code
+  autologger.
 - **Phase 2 (RFC-0009):** Extend skill bundles with non-skill
   members: subagent definitions, hooks, and MCP server references
   (cross-registry with RFC-0004).

@@ -233,7 +233,7 @@ class Skill:
     status: SkillStatus | None = None  # read-only, derived from parent-resolved version
     tags: dict[str, str] = field(default_factory=dict)
     aliases: dict[str, str] = field(default_factory=dict)  # read-only; populated from skill_aliases table, e.g. {"production": "1.2.0"}
-    latest_version: str | None = None  # read-only, highest active semver
+    latest_version: str | None = None  # read-only, shared latest-resolution rule
     created_by: str | None = None
     last_updated_by: str | None = None
     creation_timestamp: int | None = None
@@ -342,18 +342,40 @@ skills/code-review/1.0.0/
   reference/style-guide.md
 ```
 
-The `source` field contains the artifact URI as resolved by MLflow's
-artifact storage (e.g., `mlflow-artifacts:/skills/code-review/1.0.0/`
-when using the artifact proxy, or a direct artifact-store URI
-otherwise). `source_type="mlflow"` means "stored in MLflow-managed
-artifact storage," not a specific URI scheme. Pull downloads the
-directory tree from the artifact store. The MLflow UI can browse
-individual files within a stored skill version when artifact proxying
-is enabled.
+The `source` field contains the artifact URI resolved by MLflow's
+artifact storage (for example,
+`mlflow-artifacts:/skills/code-review/1.0.0/sha256-abc123/` when using
+the artifact proxy, or a direct artifact-store URI otherwise).
+`source_type="mlflow"` means "stored in MLflow-managed artifact
+storage," not a specific URI scheme. Pull downloads the directory tree
+from the artifact store. The MLflow UI can browse individual files
+within a stored skill version when artifact proxying is enabled.
 
-The upload API accepts a local directory path and stores each file as
-a separate artifact. The `content_digest` is computed over the full
-directory contents at upload time.
+**Client-side upload flow.** Direct artifact storage is implemented by
+the `register_skill(content_path=...)` SDK/CLI convenience path rather
+than a new skill-registry upload endpoint:
+
+1. The client validates the local directory and preflights that the
+   path can be registered.
+2. The client computes `content_digest` over a canonical representation
+   of the directory. Regular files are ordered by normalized relative
+   path; both paths and file contents participate in the digest.
+   Symlinks are rejected, and empty directories are not preserved.
+3. The client checks the target `(name, version)`. If the version
+   already exists, registration fails with an error. This matches
+   the MCP Server Registry behavior (`register_mcp_server()`).
+4. The client uploads each file through MLflow's existing artifact APIs
+   to a digest-qualified, version-specific artifact prefix.
+5. After upload succeeds, the client creates the `SkillVersion` with
+   `source_type="mlflow"`, the resolved artifact URI, and the computed
+   digest.
+
+The upload and registry write are not atomic. If version creation fails,
+the client makes a best-effort attempt to delete the uploaded prefix when
+the artifact backend supports deletion. Any remaining files are
+unreferenced orphaned artifacts and may be removed by artifact-store
+garbage collection. A concurrent writer can still win after preflight;
+the losing client follows the same cleanup behavior.
 
 **Version uniqueness.** The combination of `(name, version)` is unique
 within a workspace. A skill version represents a single logical
@@ -362,16 +384,16 @@ find it but are not part of its identity.
 
 **Content integrity.** The optional `content_digest` field stores a
 digest of the skill content at registration time (e.g.,
-`sha256:abc123...`). For `source_type="mlflow"`, the server computes
-the digest at upload time and stores it on the version; on pull, the
+`sha256:abc123...`). For `source_type="mlflow"`, the client computes
+the digest before upload and stores it on the version; on pull, the
 client recomputes the digest over the downloaded content and rejects
 the result if it does not match, detecting out-of-band modification
 of the underlying artifact store. For external source types (git, oci,
-zip), `content_digest` is client-supplied: for OCI sources, this is
-the native image digest; for Git sources, a digest of the file
-contents at the pinned commit; for ZIP sources, a digest of the
-archive. The registry stores the digest but does not verify it on
-read; verification is the consumer's responsibility.
+zip), `content_digest` is also client-supplied: for OCI sources, this is
+the native image digest; for Git sources, a digest of the file contents
+at the pinned commit; for ZIP sources, a digest of the archive. The
+registry stores the digest but does not verify it on read; verification
+is the consumer's responsibility.
 
 **Immutability contract.** `source_type`, `source`, `subpath`,
 `content_digest`, and `version` are immutable after creation. To point
@@ -394,7 +416,7 @@ class SkillBundle:
     status: SkillStatus | None = None  # read-only, derived from parent-resolved version
     tags: dict[str, str] = field(default_factory=dict)
     aliases: dict[str, str] = field(default_factory=dict)  # read-only; populated from skill_bundle_aliases table
-    latest_version: str | None = None  # read-only, highest active semver
+    latest_version: str | None = None  # read-only, shared latest-resolution rule
     created_by: str | None = None
     last_updated_by: str | None = None
     creation_timestamp: int | None = None
@@ -452,8 +474,9 @@ assembled, never both:
   image or Git repo) that contains the complete bundle. `pull`
   fetches the bundle artifact as a unit. Member skill versions may
   omit their own `source` because the bundle artifact is the
-  authoritative source. The optional membership `member_subpath`
-  identifies where each member lives inside the bundle artifact.
+  authoritative source. Every source-less member must provide a
+  membership `member_subpath` identifying where it lives inside the
+  bundle artifact.
 - **Assembled:** has individual member references. Each skill member
   has its own source. `pull` fetches members individually. If a skill
   member has no source, `pull` fails rather than producing a partial
@@ -462,7 +485,8 @@ assembled, never both:
   content.
 
 The API rejects attempts to set `member_subpath` on a membership whose
-member version has its own source.
+member version has its own source. It also rejects a source-less member
+of a monolithic bundle when `member_subpath` is missing or empty.
 
 **Immutability contract.** The member list and source fields of a
 bundle version are immutable after creation. To change the set of
@@ -488,6 +512,9 @@ hard deletes, while `delete_*_version` methods are soft deletes that
 transition the version to `deleted`.
 
 ```python
+from mlflow.store.tracking import SEARCH_MAX_RESULTS_DEFAULT
+
+
 NOT_SET = object()
 
 
@@ -511,7 +538,7 @@ class SkillRegistryMixin:
     def search_skills(
         self,
         filter_string: str | None = None,
-        max_results: int = 100,
+        max_results: int = SEARCH_MAX_RESULTS_DEFAULT,
         order_by: list[str] | None = None,
         page_token: str | None = None,
     ) -> PagedList[Skill]:
@@ -559,7 +586,7 @@ class SkillRegistryMixin:
         self,
         name: str,
         filter_string: str | None = None,
-        max_results: int = 100,
+        max_results: int = SEARCH_MAX_RESULTS_DEFAULT,
         order_by: list[str] | None = None,
         page_token: str | None = None,
     ) -> PagedList[SkillVersion]:
@@ -627,7 +654,7 @@ class SkillRegistryMixin:
     def search_skill_bundles(
         self,
         filter_string: str | None = None,
-        max_results: int = 100,
+        max_results: int = SEARCH_MAX_RESULTS_DEFAULT,
         order_by: list[str] | None = None,
         page_token: str | None = None,
     ) -> PagedList[SkillBundle]:
@@ -678,7 +705,7 @@ class SkillRegistryMixin:
         self,
         name: str,
         filter_string: str | None = None,
-        max_results: int = 100,
+        max_results: int = SEARCH_MAX_RESULTS_DEFAULT,
         order_by: list[str] | None = None,
         page_token: str | None = None,
     ) -> PagedList[SkillBundleVersion]:
@@ -734,17 +761,25 @@ class SkillRegistryMixin:
         raise NotImplementedError(self.__class__.__name__)
 ```
 
+The alias name `latest` is reserved for both skills and skill bundles.
+The corresponding `set_*_alias()` methods reject it. Alias lookup with
+`latest` delegates to `get_latest_skill_version()` or
+`get_latest_skill_bundle_version()` rather than reading a stored alias
+row.
+
 For update fields, omitting a parameter leaves the stored value unchanged,
 while passing `None` to a nullable field explicitly sets the field to
 `null`.
 
 ## SDK convenience functions
 
-The `mlflow.genai.skills` namespace provides convenience functions that
-combine store operations, matching the pattern established by
-`mlflow.genai.register_mcp_server()` in RFC-0004.
+The `mlflow.genai` namespace provides convenience functions that
+combine store operations, matching the top-level public SDK pattern
+established by `mlflow.genai.register_mcp_server()` in RFC-0004.
 
 ```python
+from dataclasses import dataclass
+
 import mlflow
 
 
@@ -761,9 +796,13 @@ def register_skill(
     content_digest: str | None = None,
 ) -> SkillVersion:
     """Register a skill version. Auto-creates the parent Skill if
-    it does not exist. If content_path is provided, uploads the
-    local directory to MLflow artifact storage and sets source_type
-    and source automatically."""
+    it does not exist and otherwise reuses the existing parent. If the
+    version already exists, an MlflowException is raised. This matches
+    the MCP Server Registry behavior (register_mcp_server). If
+    content_path is provided, the client uploads the files through
+    existing MLflow artifact APIs and sets source_type, source, and
+    content_digest. content_path is mutually exclusive with source_type,
+    source, subpath, and content_digest."""
 
 
 def create_skill(
@@ -944,6 +983,86 @@ def set_skill_bundle_alias(*, name: str, alias: str, version: str) -> None: ...
 def delete_skill_bundle_alias(*, name: str, alias: str) -> None: ...
 
 
+@dataclass(frozen=True)
+class PluginImportWarning:
+    category: str
+    path: str
+    message: str
+
+
+@dataclass(frozen=True)
+class IntrospectedSkill:
+    name: str
+    path: str
+
+
+@dataclass
+class PluginIntrospectionResult:
+    bundle_name: str | None
+    version: str | None
+    skills: list[IntrospectedSkill]
+    warnings: list[PluginImportWarning]
+
+
+@dataclass
+class PluginImportResult:
+    bundle_version: SkillBundleVersion
+    skill_versions: list[SkillVersion]
+    warnings: list[PluginImportWarning]
+
+
+def introspect_bundle(
+    *,
+    source: str,
+    plugin_format: str,
+    source_type: str | None = None,
+    subpath: str | None = None,
+) -> PluginIntrospectionResult:
+    """Inspect a local or remote plugin without modifying the registry."""
+
+
+def import_bundle(
+    *,
+    source: str,
+    plugin_format: str,
+    bundle_name: str | None = None,
+    version: str | None = None,
+    source_type: str | None = None,
+    subpath: str | None = None,
+) -> PluginImportResult:
+    """Import a plugin as a monolithic skills-only bundle.
+
+    Fetches and inspects the plugin in the client environment, registers
+    discovered skills, preserves the plugin source on the bundle version,
+    and returns warnings for non-skill content that was skipped.
+    """
+
+
+def install_skill(
+    *,
+    name: str,
+    version: str | None = None,
+    alias: str | None = None,
+    package_manager: str | None = None,
+    harness: str | None = None,
+    scope: str = "project",
+) -> str:
+    """Resolve a skill and install it through a package manager plugin."""
+
+
+def install_bundle(
+    *,
+    name: str,
+    version: str | None = None,
+    alias: str | None = None,
+    package_manager: str | None = None,
+    harness: str | None = None,
+    scope: str = "project",
+) -> str:
+    """Resolve a skills-only bundle and install it through a package
+    manager plugin."""
+
+
 def pull(
     *,
     name: str | None = None,
@@ -958,8 +1077,8 @@ def pull(
 
 
 # Example usage:
-version = mlflow.genai.skills.register_skill(name="code-review", version="1.0.0", source_type="git", source="...")
-servers = mlflow.genai.skills.search_skills(filter_string="status = 'active'")
+version = mlflow.genai.register_skill(name="code-review", version="1.0.0", source_type="git", source="...")
+servers = mlflow.genai.search_skills(filter_string="status = 'active'")
 ```
 
 For SDK update methods, `NOT_SET` means "leave unchanged" while `None`
@@ -979,6 +1098,11 @@ The REST API is implemented as a FastAPI router using RESTful nested
 resource paths. It is exposed under both `/api/3.0/mlflow/skills` and
 `/ajax-api/3.0/mlflow/skills`, plus the corresponding static-prefix
 variants, following the MCP Server Registry (RFC-0004) pattern.
+
+There is no skill-registry content-upload endpoint. The client-side
+`register_skill(content_path=...)` helper uploads through existing
+MLflow artifact APIs, then uses the version-creation endpoint below to
+store the resulting artifact URI and digest.
 
 ### Skill endpoints
 
@@ -1194,10 +1318,12 @@ consistent with the MCP Server Registry (RFC-0004).
 
 ## Python SDK and CLI
 
-The `mlflow.genai.skills` module exposes top-level functions delegating
-to `MlflowClient`, with a 1:1 mapping to the store mixin methods
-above. The `mlflow skills` CLI command group provides the same
-operations from the command line:
+The `mlflow.genai` module exposes the public registry functions,
+delegating to `MlflowClient`, plus client-side import, pull, and
+package-manager installation operations that compose those registry
+functions. Skill-specific entity and request types are also re-exported
+from `mlflow.genai`. The `mlflow skills` CLI command group provides the
+same operations from the command line:
 
 | CLI subcommand | SDK function | Description |
 |---|---|---|
@@ -1209,8 +1335,8 @@ operations from the command line:
 | `mlflow skills set-alias` | `set_skill_alias()` | Set a version alias |
 | `mlflow skills set-tag` | `set_skill_tag()` | Set a tag |
 | `mlflow skills pull` | `pull()` | Pull content to local filesystem |
-| `mlflow skills install` | (direct install) | Download and place in harness directory |
-| `mlflow skills install-bundle` | (package manager install) | Install bundle via package manager plugin |
+| `mlflow skills install` | `install_skill()` | Install one skill through a package manager plugin |
+| `mlflow skills install-bundle` | `install_bundle()` | Install a skills-only bundle through a package manager plugin |
 | `mlflow skills create-bundle` | `create_skill_bundle()` | Create a skill bundle |
 | `mlflow skills create-bundle-version` | `create_skill_bundle_version()` | Create a bundle version with members |
 | `mlflow skills get-bundle` | `get_skill_bundle()` | Get bundle metadata |
@@ -1220,6 +1346,8 @@ operations from the command line:
 | `mlflow skills set-bundle-tag` | `set_skill_bundle_tag()` | Set a bundle-level tag |
 | `mlflow skills set-bundle-version-tag` | `set_skill_bundle_version_tag()` | Set a bundle version tag |
 | `mlflow skills update-bundle-version` | `update_skill_bundle_version()` | Update bundle version status |
+| `mlflow skills introspect` | `introspect_bundle()` | Preview a local or remote plugin without registry writes |
+| `mlflow skills import` | `import_bundle()` | Import a plugin as a monolithic skills-only bundle |
 
 **Existing `mlflow skills` CLI group.** MLflow already has an
 `mlflow skills` CLI group (`mlflow/cli/skills.py`) with two
@@ -1233,11 +1361,98 @@ on locally bundled skills, while `search`/`get`/`register`/`pull`
 and the other registry subcommands operate on the server-side
 registry.
 
+## Plugin import
+
+Plugin import is implemented in the SDK and CLI layer. There is no
+dedicated REST import endpoint: the client fetches and inspects the
+source locally, then calls the existing skill and bundle creation APIs.
+The registry server does not fetch user-supplied plugin URLs.
+
+### Read-only preview
+
+`introspect_bundle()` and `mlflow skills introspect` run the same plugin
+discovery used by import but do not create or modify registry records.
+They accept either a local path or a remote Git, OCI, ZIP, or MLflow
+artifact source and return the discovered skill names and paths,
+available plugin name and version metadata, and warnings for skipped
+non-skill content. A local path must not specify `source_type`; remote
+sources use an explicit source type or the same unambiguous syntax
+inference as import. Introspection does not require the plugin to provide
+a name or version because those values are only required when importing.
+
+### Phase 1 input format
+
+Phase 1 supports the Claude Code plugin layout. The caller passes
+`plugin_format="claude-code"`; automatic format detection and additional
+input formats are follow-up work. The importer:
+
+1. Fetches the Git, OCI, ZIP, or MLflow artifact source using the same
+   source-type-aware logic as `pull`.
+2. Applies `subpath`, when provided, to select the plugin root.
+3. Reads `.claude-plugin/plugin.json` when present to obtain supported
+   plugin metadata such as name and version. Explicit `bundle_name` and
+   `version` arguments take precedence.
+4. Discovers skill directories under `skills/` that contain a SKILL.md
+   entry point. The SKILL.md name is used when present; otherwise the
+   directory name is used.
+5. Detects non-skill plugin content, including subagents, hooks, and MCP
+   configuration, for warning purposes only.
+
+The resulting bundle name and version must be available after explicit
+arguments and plugin metadata are considered. The version must be a
+valid semantic version. When `source_type` is omitted, the client infers
+it from the source syntax and fails if the source type is ambiguous.
+
+### Registration behavior
+
+For each discovered skill, the importer creates a `SkillVersion` whose
+version defaults to the bundle version and whose `source_type`, `source`,
+and `subpath` are null. The importer records the skill's plugin-relative
+directory as `SkillMemberRef.member_subpath`.
+
+After registering the embedded skills, the importer creates one
+monolithic `SkillBundleVersion` with the original `source_type`,
+`source`, and `subpath`, plus member references for all discovered
+skills. This preserves a pullable link to the complete original plugin
+while keeping Phase 1 registry metadata skills-only.
+
+The import fails if no skills are discovered. It also preflights all
+target `(name, version)` pairs and fails if any skill or bundle version
+already exists. It never overwrites or reuses an existing version. A
+caller resolves a conflict by choosing a different bundle version or
+renaming the conflicting skill before import.
+
+### Warnings and result
+
+Subagents, hooks, MCP configurations, and unrecognized content remain
+in the plugin artifact but are not registered. Each discovered skipped
+category produces a `PluginImportWarning` containing its category,
+path, and an explanation that Phase 1 registers skills only. The CLI
+prints these warnings after registration. The SDK returns them together
+with the created bundle and skill versions in `PluginImportResult`.
+
+Import only translates an existing plugin into MLflow's skills-only
+registry representation. It does not install the plugin, generate a
+downstream manifest, or translate an MLflow bundle into a downstream
+bundle format.
+
 ## Package manager plugin interface
 
 Package manager plugins are registered via Python entrypoints (group
 `mlflow.skill_package_managers`), so third-party plugins can be
 installed via `pip install` without modifying MLflow core.
+
+In Phase 1, these plugins receive only resolved skills or skills-only
+bundle members. They install those skills using an existing package
+manager, but they do not translate MLflow bundle definitions into
+downstream bundle formats. Generic translation for bundles containing
+non-skill members is deferred to RFC-0009.
+
+Both `mlflow skills install` and `mlflow skills install-bundle` require
+a package manager plugin. The caller can select a plugin explicitly, or
+MLflow uses the configured default. If no plugin is selected or
+available, installation fails with guidance to install or configure one;
+`mlflow skills pull` remains available without a package manager.
 
 ### Plugin protocol
 
@@ -1257,7 +1472,8 @@ class PackageManagerPlugin:
             name: skill name for manifest generation
             local_path: local directory with skill content
             harness: target harness (e.g., "claude-code", "cursor").
-                If None, auto-detect from environment.
+                Behavior when omitted is pending investigation of APM
+                and Lola harness-detection capabilities.
             scope: "project" (cwd) or "user" (home directory)
         """
         ...
@@ -1276,7 +1492,8 @@ class PackageManagerPlugin:
         Args:
             bundle_name: bundle name for manifest generation
             member_paths: {skill_name: local_path} for each member
-            harness: target harness. If None, auto-detect.
+            harness: target harness. Behavior when omitted is pending
+                investigation of APM and Lola harness-detection capabilities.
             scope: "project" or "user"
         """
         ...
@@ -1296,36 +1513,47 @@ apm = "apm_mlflow:ApmPlugin"
 lola = "lola_mlflow:LolaPlugin"
 ```
 
-### Source resolution flow
+### Bundle installation flow
 
 When `mlflow skills install-bundle` is invoked:
 
 1. **Resolve:** MLflow calls `get_skill_bundle_version()` (or alias
    resolution) to obtain the bundle version and its member list.
-2. **Pull:** For each member skill, MLflow pulls content to a local
-   temporary directory using source-type-aware logic (git clone, OCI
-   pull, ZIP download, MLflow artifact download). For Git-backed
-   skills, the package manager can fetch directly from Git if it
-   supports Git sources natively, avoiding a redundant local pull.
+2. **Materialize member paths:**
+   - For an assembled bundle, MLflow pulls each member skill to its own
+     local temporary directory using source-type-aware logic (Git clone,
+     OCI pull, ZIP download, or MLflow artifact download).
+   - For a monolithic bundle, MLflow pulls the bundle-level source once
+     using the same source-type-aware logic. For each member, it resolves
+     a local path by joining the pulled bundle root with
+     `member_subpath`. Every monolithic member must provide a non-empty
+     `member_subpath`; installation fails if the path is missing, escapes
+     the pulled bundle root after normalization, or does not contain the
+     embedded skill.
 3. **Delegate:** MLflow passes the local paths to the configured
    package manager plugin via `install_bundle()`. The plugin handles
    harness-specific directory placement and manifest generation.
 4. **Manifest:** MLflow writes `mlflow-skills-manifest.json` with
    installed registry coordinates for trace integration.
 
-### Direct install flow
+### Single-skill installation flow
 
-When `mlflow skills install` is invoked (no package manager needed):
+When `mlflow skills install` is invoked:
 
-1. **Resolve:** MLflow calls `get_skill_version()` (or alias
-   resolution) to obtain the source pointer.
-2. **Pull:** MLflow pulls content to a local temporary directory.
-3. **Place:** MLflow copies the content to the appropriate
-   harness-specific directory based on the `--harness` flag:
-   - `claude-code`: `.claude/skills/{name}/`
-   - `cursor`: `.cursor/skills/{name}/`
-   - Other harnesses: configurable via settings
-4. **Manifest:** MLflow writes `mlflow-skills-manifest.json`.
+1. **Resolve:** MLflow calls `get_skill_version()`, alias resolution, or
+   latest resolution to obtain the registered source pointer. `version`
+   and `alias` are mutually exclusive; omitting both selects the
+   system-defined latest version.
+2. **Pull:** MLflow pulls the skill content to a local temporary
+   directory using the same source-type-aware logic as `pull`.
+3. **Delegate:** MLflow passes the skill name and local path to the
+   configured package manager plugin via `install_skill()`. The plugin
+   owns harness-specific behavior, scope handling, directory placement,
+   and any generated package-manager or harness metadata. An explicit
+   harness selection from the caller is passed through to the plugin.
+4. **Manifest:** After the plugin reports success, MLflow writes or
+   updates `mlflow-skills-manifest.json` with the resolved registry
+   coordinates.
 
 ## Pull semantics details
 
@@ -1363,11 +1591,70 @@ following attributes:
 |---|---|---|
 | `mlflow.skill.name` | Skill name | Registry name of the active skill |
 | `mlflow.skill.version` | Version string | Registered version |
-| `mlflow.skill.workspace` | Workspace name | MLflow workspace (defaults to `"default"`) |
+| `mlflow.skill.workspace` | Workspace name | Resolved from the install manifest, falling back to the current tracking URI's workspace context |
 
 These three attributes form the `{workspace, name, version}`
 coordinates that link the span back to a specific skill version in
 the registry.
+
+## Automatic trace instrumentation
+
+Automatic instrumentation uses the install-time
+`mlflow-skills-manifest.json` to map harness-local skill invocations to
+registered skill coordinates. Phase 1 implements this behavior in the
+Claude Code autologger. The manifest format is harness-neutral so other
+harness integrations can adopt the same contract later.
+
+### Manifest writing and discovery
+
+Installation commands write or update the manifest after all requested
+skills have been installed successfully. Each entry is keyed by the
+harness-local skill name and contains the registered `workspace`,
+`name`, and resolved `version`. Aliases are resolved before the
+manifest is written and are not stored in place of versions.
+
+Project-scoped installation writes the manifest at the project root.
+User-scoped installation writes it in the MLflow user configuration
+directory. Project entries take precedence over user entries with the
+same harness-local skill name.
+
+For a monolithic bundle, installation writes an entry for every
+registered embedded skill resolved through its `member_subpath`. For an
+assembled bundle, it writes an entry for every installed member skill.
+The bundle itself does not produce a SKILL span because tracing is at
+the invoked-skill level.
+
+### Claude Code invocation matching
+
+The Phase 1 Claude Code autologger matches harness skill invocations
+against manifest entries by skill name. When a match is found, it
+creates a span with:
+
+- span type `SKILL`
+- span name equal to the harness-local skill name
+- `mlflow.skill.name`, `mlflow.skill.version`, and
+  `mlflow.skill.workspace` attributes from the manifest
+
+LLM and tool spans produced while the skill is active become children
+of the SKILL span.
+
+If a matching SKILL span with the same registry coordinates is already
+active because application code used `mlflow.skill_context()`, the
+autologger reuses that active context and does not create a duplicate
+SKILL span.
+
+### Failure behavior
+
+Automatic instrumentation does not contact the registry during skill
+invocation and does not add runtime latency or create a dependency on
+registry availability.
+
+A missing manifest, malformed manifest, or unmatched skill name never
+interrupts the agent run or other autologging; it only prevents
+creation of a registry-linked SKILL span for the affected invocation.
+Skills copied into a harness without an MLflow installation command
+have no manifest entry and are not linked automatically; callers can
+still use `mlflow.skill_context()` manually.
 
 ## SDK and CLI code examples
 
@@ -1375,9 +1662,9 @@ the registry.
 
 ```python
 import mlflow
-from mlflow.genai.skills import SkillMemberRef
+from mlflow.genai import SkillMemberRef
 
-mlflow.genai.skills.register_skill(
+mlflow.genai.register_skill(
     name="code-review",
     version="1.0.0",
     source_type="oci",
@@ -1385,7 +1672,7 @@ mlflow.genai.skills.register_skill(
     subpath="skills/code-review",
 )
 
-mlflow.genai.skills.register_skill(
+mlflow.genai.register_skill(
     name="test-coverage",
     version="2.1.0",
     source_type="oci",
@@ -1394,7 +1681,7 @@ mlflow.genai.skills.register_skill(
 )
 
 # Assembled bundle: each member has its own source
-bundle_version = mlflow.genai.skills.create_skill_bundle_version(
+bundle_version = mlflow.genai.create_skill_bundle_version(
     name="pr-workflow",
     version="1.0.0",
     skills=[
@@ -1405,12 +1692,12 @@ bundle_version = mlflow.genai.skills.create_skill_bundle_version(
 
 # Monolithic bundle from a single OCI image. Embedded member
 # versions are registered without their own sources.
-mlflow.genai.skills.register_skill(
+mlflow.genai.register_skill(
     name="embedded-review",
     version="1.0.0",
 )
 
-bundle_version = mlflow.genai.skills.create_skill_bundle_version(
+bundle_version = mlflow.genai.create_skill_bundle_version(
     name="pr-workflow-mono",
     version="1.0.0",
     source_type="oci",
@@ -1426,18 +1713,18 @@ bundle_version = mlflow.genai.skills.create_skill_bundle_version(
 
 ```python
 # Search for active skill versions
-versions = mlflow.genai.skills.search_skill_versions(
+versions = mlflow.genai.search_skill_versions(
     name="code-review",
     filter_string="status = 'active'",
 )
 
 # Search for active skill bundles
-bundles = mlflow.genai.skills.search_skill_bundles(
+bundles = mlflow.genai.search_skill_bundles(
     filter_string="status = 'active'",
 )
 
 # Get a specific version
-version = mlflow.genai.skills.get_skill_version(
+version = mlflow.genai.get_skill_version(
     name="code-review",
     version="1.0.0",
 )
@@ -1446,20 +1733,20 @@ version = mlflow.genai.skills.get_skill_version(
 # version.subpath == "code-review"
 
 # Resolve by alias
-version = mlflow.genai.skills.get_skill_version_by_alias(
+version = mlflow.genai.get_skill_version_by_alias(
     name="code-review",
     alias="production",
 )
 
 # Get a bundle version and its pinned members
-bundle_version = mlflow.genai.skills.get_skill_bundle_version(
+bundle_version = mlflow.genai.get_skill_bundle_version(
     name="pr-workflow",
     version="1.0.0",
 )
 # bundle_version.skills == [SkillMemberRef(name="code-review", version="1.0.0"), ...]
 
 # Resolve a bundle alias
-bundle_version = mlflow.genai.skills.get_skill_bundle_version_by_alias(
+bundle_version = mlflow.genai.get_skill_bundle_version_by_alias(
     name="pr-workflow",
     alias="production",
 )
