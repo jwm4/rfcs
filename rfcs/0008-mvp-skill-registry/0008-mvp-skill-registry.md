@@ -133,7 +133,8 @@ in Phase 1.
 
 ```bash
 # Install a skill bundle for Claude Code via a package manager
-mlflow skills install-bundle --name pr-workflow --alias production
+mlflow skills install-bundle --name pr-workflow --alias production \
+    --harness claude-code
 
 # Or install a single skill through the same package-manager layer
 mlflow skills install --name code-review --alias production \
@@ -298,7 +299,8 @@ Registry enables. Each shows both CLI and UI paths.
 
 1. Install the bundle using a package manager plugin:
    ```bash
-   mlflow skills install-bundle --name pr-workflow --alias production
+   mlflow skills install-bundle --name pr-workflow --alias production \
+       --harness claude-code
    ```
    This resolves the bundle from the registry, pulls the bundle
    content, delegates to the configured package manager (e.g., APM
@@ -568,7 +570,7 @@ members), and direct mapping to the harness plugin concept. Follows
 the same top-level pattern as Skill: versions, tags, aliases, and
 derived status.
 
-A follow-up RFC will extend skill bundles to include non-skill
+A follow-up RFC will add registry entries for non-skill bundle
 members (e.g., subagents, MCP server references), enabling full
 "plugin"-style bundles.
 The member table schema includes a `member_type` field for forward
