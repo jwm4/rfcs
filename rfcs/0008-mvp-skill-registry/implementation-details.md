@@ -1011,6 +1011,30 @@ class PluginImportResult:
     warnings: list[PluginImportWarning]
 
 
+@dataclass(frozen=True)
+class InstalledSkill:
+    registry_name: str
+    harness_local_name: str
+    installed_path: str
+
+
+@dataclass
+class PackageManagerInstallResult:
+    installed_path: str
+    skills: list[InstalledSkill]
+
+
+@dataclass(frozen=True)
+class MlflowSkillLockEntry:
+    entity_type: str
+    name: str
+    version: str
+    workspace: str
+    package_manager: str
+    harness: str
+    scope: str
+
+
 def introspect_bundle(
     *,
     source: str,
@@ -1047,10 +1071,12 @@ def install_skill(
     alias: str | None = None,
     package_manager: str | None = None,
     scope: str = "project",
-) -> str:
+    lock_file: str | None = None,
+) -> PackageManagerInstallResult:
     """Resolve a skill and install it through a package manager plugin.
     The harness argument is required to keep behavior predictable
-    across plugins."""
+    across plugins. If lock_file is provided, record the exact resolved
+    version and installation inputs for replay."""
 
 
 def install_bundle(
@@ -1061,11 +1087,21 @@ def install_bundle(
     alias: str | None = None,
     package_manager: str | None = None,
     scope: str = "project",
-) -> str:
+    lock_file: str | None = None,
+) -> PackageManagerInstallResult:
     """Resolve a bundle and install it through a package manager plugin.
     For monolithic bundles, non-skill content is included in the
     installed artifact. The harness argument is required to keep
-    behavior predictable across plugins."""
+    behavior predictable across plugins. If lock_file is provided,
+    record the exact resolved version and installation inputs for
+    replay."""
+
+
+def install_from_lock(
+    *, lock_file: str = "mlflow-skills.lock",
+) -> list[PackageManagerInstallResult]:
+    """Replay exact skill and bundle versions from an MLflow resolution
+    lock using the recorded package manager, harness, and scope."""
 
 
 def pull(
@@ -1342,6 +1378,7 @@ same operations from the command line:
 | `mlflow skills pull` | `pull()` | Pull content to local filesystem |
 | `mlflow skills install` | `install_skill()` | Install one skill through a package manager plugin |
 | `mlflow skills install-bundle` | `install_bundle()` | Install a bundle through a package manager plugin |
+| `mlflow skills install --from-lock` | `install_from_lock()` | Replay exact registry versions from an MLflow resolution lock |
 | `mlflow skills create-bundle` | `create_skill_bundle()` | Create a skill bundle |
 | `mlflow skills create-bundle-version` | `create_skill_bundle_version()` | Create a bundle version with members |
 | `mlflow skills get-bundle` | `get_skill_bundle()` | Get bundle metadata |
@@ -1379,8 +1416,9 @@ The registry server does not fetch user-supplied plugin URLs.
 discovery used by import but do not create or modify registry records.
 They accept either a local path or a remote Git, OCI, ZIP, or MLflow
 artifact source and return the discovered skill names and paths,
-available plugin name and version metadata, and warnings for skipped
-non-skill content. A local path must not specify `source_type`; remote
+available plugin name and version metadata, and warnings for
+unregistered non-skill content. A local path must not specify
+`source_type`; remote
 sources use an explicit source type or the same unambiguous syntax
 inference as import. Introspection does not require the plugin to provide
 a name or version because those values are only required when importing.
@@ -1443,6 +1481,36 @@ preserving the complete plugin source. It does not install the plugin,
 generate a downstream manifest, or translate an MLflow bundle into a
 downstream bundle format.
 
+## MLflow resolution lock
+
+Package managers receive materialized local paths, so their own
+lockfiles cannot by themselves reconstruct which MLflow registry
+versions produced those paths. When `lock_file` is supplied to
+`install_skill()` or `install_bundle()`, MLflow writes or updates an
+`mlflow-skills.lock` resolution lock after installation succeeds.
+
+Each entry records the entity type (`skill` or `bundle`), name, exact
+resolved version, workspace, selected package manager, harness, and
+scope. Aliases and `latest` are resolved before writing the entry and
+are never stored in place of a version. A bundle entry does not repeat
+its members because bundle membership is immutable and can be recovered
+from the exact bundle version.
+
+A resolution lock is scoped to one workspace. Appending an entry from a
+different workspace fails, and replay requires the configured MLflow
+client to target the recorded workspace.
+
+`install_from_lock()` reads the entries, resolves the exact versions
+through the currently configured MLflow client, materializes their
+content, and delegates to the recorded package manager. Normal registry
+visibility and lifecycle rules apply during replay, so an unavailable or
+deleted version causes the replay to fail rather than silently installing
+different content. Package-manager lockfiles may additionally capture
+package-manager-specific layout, cached sources, and integrity metadata.
+The CLI `--from-lock` mode uses the recorded installation inputs and is
+mutually exclusive with name, version, alias, package manager, harness,
+scope, and lock-writing options.
+
 ## Package manager plugin interface
 
 Package manager plugins are registered via Python entrypoints (group
@@ -1453,7 +1521,12 @@ In Phase 1, these plugins receive resolved skills or bundle content
 (which may include non-skill content in monolithic bundles). They
 install the content using an existing package manager. The package
 manager handles placement of all content, including non-skill files
-that do not have individual registry entries.
+that do not have individual registry entries. It returns the actual
+harness-local name of every installed skill so MLflow can write an
+accurate trace manifest even when the package manager renames or prefixes
+skills. The result must contain exactly one `InstalledSkill` for every
+requested registry skill; missing or duplicate mappings fail the install
+before MLflow writes its trace manifest or resolution lock.
 
 Both `mlflow skills install` and `mlflow skills install-bundle` require
 a package manager plugin. The caller can select a plugin explicitly, or
@@ -1471,12 +1544,12 @@ class PackageManagerPlugin:
         local_path: str,
         harness: str,
         scope: str = "project",
-    ) -> str:
+    ) -> PackageManagerInstallResult:
         """Install a single skill from a local path.
-        Returns the installed path.
+        Returns the installed path and harness-local skill name.
 
         Args:
-            name: skill name for manifest generation
+            name: registry skill name
             local_path: local directory with skill content
             harness: target harness (e.g., "claude-code", "cursor")
             scope: "project" (cwd) or "user" (home directory)
@@ -1488,16 +1561,20 @@ class PackageManagerPlugin:
         bundle_name: str,
         member_paths: dict[str, str],
         harness: str,
+        bundle_path: str | None = None,
         scope: str = "project",
-    ) -> str:
-        """Install a bundle of skills from local paths.
-        member_paths maps skill names to local paths.
-        Returns the installed path.
+    ) -> PackageManagerInstallResult:
+        """Install a bundle from local paths. member_paths maps registry
+        skill names to local paths. For a monolithic bundle, bundle_path
+        is the complete artifact root and must be installed as a unit.
+        Returns the installed path and harness-local skill names.
 
         Args:
-            bundle_name: bundle name for manifest generation
+            bundle_name: registry bundle name
             member_paths: {skill_name: local_path} for each member
             harness: target harness (e.g., "claude-code", "cursor")
+            bundle_path: complete monolithic bundle root, or None for an
+                assembled bundle
             scope: "project" or "user"
         """
         ...
@@ -1528,17 +1605,23 @@ When `mlflow skills install-bundle` is invoked:
      local temporary directory using source-type-aware logic (Git clone,
      OCI pull, ZIP download, or MLflow artifact download).
    - For a monolithic bundle, MLflow pulls the bundle-level source once
-     using the same source-type-aware logic. For each member, it resolves
-     a local path by joining the pulled bundle root with
-     `member_subpath`. Every monolithic member must provide a non-empty
-     `member_subpath`; installation fails if the path is missing, escapes
-     the pulled bundle root after normalization, or does not contain the
-     embedded skill.
-3. **Delegate:** MLflow passes the local paths to the configured
-   package manager plugin via `install_bundle()`. The plugin handles
-   harness-specific directory placement and manifest generation.
-4. **Manifest:** MLflow writes `mlflow-skills-manifest.json` with
-   installed registry coordinates for trace integration.
+     using the same source-type-aware logic and retains the complete root
+     as `bundle_path`, including opaque non-skill content. For each
+     member, it resolves a local path by joining the pulled bundle root
+     with `member_subpath`. Every monolithic member must provide a
+     non-empty `member_subpath`; installation fails if the path is missing,
+     escapes the pulled bundle root after normalization, or does not
+     contain the embedded skill.
+3. **Delegate:** MLflow passes `member_paths` and, for a monolithic
+   bundle, `bundle_path` to the configured package manager plugin via
+   `install_bundle()`. The plugin installs the complete monolithic bundle
+   or the assembled skills and returns each skill's harness-local name.
+4. **Manifest:** MLflow writes `mlflow-skills-manifest.json`, keyed by
+   the returned harness-local names and populated with the corresponding
+   registry coordinates.
+5. **Resolution lock:** If `lock_file` was supplied, MLflow atomically
+   updates it with the exact resolved bundle version and installation
+   inputs after the install and manifest write succeed.
 
 ### Single-skill installation flow
 
@@ -1553,11 +1636,15 @@ When `mlflow skills install` is invoked:
 3. **Delegate:** MLflow passes the skill name and local path to the
    configured package manager plugin via `install_skill()`. The plugin
    owns harness-specific behavior, scope handling, directory placement,
-   and any generated package-manager or harness metadata. An explicit
-   harness selection from the caller is passed through to the plugin.
+   naming, and any generated package-manager or harness metadata. An
+   explicit harness selection from the caller is passed through to the
+   plugin, which returns the actual harness-local skill name.
 4. **Manifest:** After the plugin reports success, MLflow writes or
-   updates `mlflow-skills-manifest.json` with the resolved registry
-   coordinates.
+   updates `mlflow-skills-manifest.json` under the returned harness-local
+   name with the resolved registry coordinates.
+5. **Resolution lock:** If `lock_file` was supplied, MLflow atomically
+   updates it with the exact resolved skill version and installation
+   inputs after the install and manifest write succeed.
 
 ## Pull semantics details
 
@@ -1613,9 +1700,10 @@ harness integrations can adopt the same contract later.
 
 Installation commands write or update the manifest after all requested
 skills have been installed successfully. Each entry is keyed by the
-harness-local skill name and contains the registered `workspace`,
-`name`, and resolved `version`. Aliases are resolved before the
-manifest is written and are not stored in place of versions.
+harness-local skill name returned by the package manager plugin and
+contains the registered `workspace`, `name`, and resolved `version`.
+Aliases are resolved before the manifest is written and are not stored
+in place of versions.
 
 Project-scoped installation writes the manifest at the project root.
 User-scoped installation writes it in the MLflow user configuration
