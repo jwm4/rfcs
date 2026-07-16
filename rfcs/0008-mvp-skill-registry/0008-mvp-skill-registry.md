@@ -55,7 +55,9 @@ CLI](implementation-details.md#python-sdk-and-cli) for details.
 The two entity types are:
 
 - **Skills**: a directory containing a SKILL.md entry point plus
-  supporting files (scripts, templates, reference material)
+  supporting files (scripts, templates, reference material). See the
+  [Agent Skills specification](https://agentskills.io/) for the
+  complete format definition.
 - **Skill bundles**: versioned collections that group related skills
   into a single governed, installable unit
 
@@ -63,9 +65,10 @@ The two entity types are:
 registered content from its source. Harness-specific installation
 delegates to package managers (APM, Lola, or others via a plugin
 interface) that already support cross-harness skill installation.
-Existing Claude Code plugins can be imported as monolithic skills-only
-bundles: MLflow registers their discovered skills, preserves the plugin
-source, and warns about non-skill content that Phase 1 does not register.
+Existing Claude Code plugins can be imported as monolithic bundles:
+MLflow registers their discovered skills, preserves the plugin source,
+and warns about non-skill content that is pulled and installed alongside
+the skills but does not receive individual registry entries in Phase 1.
 
 Trace integration supports both manual and automatic instrumentation.
 `mlflow.skill_context()` lets SDK applications create SKILL spans
@@ -75,8 +78,8 @@ Both paths annotate spans with registry coordinates, enabling adoption
 tracking, deprecation impact analysis, per-skill cost attribution, and
 regression detection.
 
-A follow-up RFC will extend skill bundles to include
-non-skill members (e.g., subagents, MCP server references).
+A follow-up RFC will add registry entries for non-skill bundle
+members (e.g., subagents, MCP server references).
 
 # Basic example
 
@@ -236,7 +239,7 @@ Registry enables. Each shows both CLI and UI paths.
    **UI path:** In the bundle detail page, click "Add Alias" and map
    `production` to version `1.0.0`.
 
-#### Import an existing plugin as a skills-only bundle
+#### Import an existing plugin as a bundle
 
 1. Import a Claude Code plugin from a remotely accessible source:
    ```bash
@@ -254,8 +257,9 @@ Registry enables. Each shows both CLI and UI paths.
    monolithic bundle version. The bundle retains the original plugin
    source pointer.
 4. If the plugin also contains subagents, hooks, or MCP configuration,
-   MLflow skips those elements and prints a warning that Phase 1
-   registers skills only.
+   MLflow prints a warning that Phase 1 does not create individual
+   registry entries for non-skill content. The content remains in the
+   bundle and is included when the bundle is pulled or installed.
 5. The created bundle and skills are available through the same
    discovery, lifecycle, pull, and installation flows as manually
    registered entries.
@@ -469,10 +473,12 @@ discovery/search operations.
 
 ### Out of scope
 
-- **Non-skill entity types.** Non-skill members (e.g., subagent
-  definitions, MCP server references) are deferred to a follow-up RFC
-  that will extend skill bundles. The registry backend is designed to
-  be extensible to these types.
+- **Registry entries for non-skill content.** Bundles can contain
+  non-skill content (e.g., subagents, MCP configurations) that is
+  pulled and installed alongside skills, but Phase 1 does not create
+  individual registry entries for non-skill members. A follow-up RFC
+  will add those entries. The registry backend is designed to be
+  extensible to these types.
 - **Artifact storage as the only path.** The registry supports both
   external source pointers (Git, OCI, ZIP) and direct artifact storage
   (`source_type="mlflow"`). However, it is not an artifact-only store;
@@ -693,8 +699,8 @@ This aligns with the MCP Server Registry (RFC-0004).
 ### Plugin import
 
 `mlflow skills import` is a client-side convenience operation for
-registering an existing harness-specific plugin as a monolithic
-skills-only bundle. Phase 1 supports the Claude Code plugin layout.
+registering an existing harness-specific plugin as a monolithic bundle.
+Phase 1 supports the Claude Code plugin layout.
 Additional input formats can be added later without changing the
 registry data model.
 
@@ -984,13 +990,14 @@ installation. This avoids duplicating work that projects like
 [Lola](https://github.com/LobsterTrap/lola) already handle well, and
 lets the MLflow community benefit from their evolving harness support.
 
-The Phase 1 plugin boundary is intentionally narrow. MLflow resolves
-skills and skills-only bundles into concrete skill sources or local
-paths, then passes those skills to an existing package manager for
-installation. Phase 1 does not define a generic adapter that translates
-MLflow bundle definitions into downstream bundle formats. Translation
-of richer bundles containing non-skill members (e.g., subagents, MCP
-server references) is deferred to the follow-up RFC.
+The Phase 1 registry boundary is intentionally narrow. MLflow creates
+registry entries only for skills within a bundle; non-skill content
+(e.g., subagents, MCP configurations) remains in the bundle source and
+is included when the bundle is pulled or installed, but does not receive
+individual registry entries. A follow-up RFC will add registry entries
+for non-skill member types. MLflow resolves bundles into concrete skill
+sources or local paths, then passes those to an existing package manager
+for installation.
 
 #### Installation commands
 
@@ -1002,29 +1009,33 @@ package manager plugin:
    the plugin's `install_skill()` operation.
 
 2. **Bundle install** (`mlflow skills install-bundle`): MLflow resolves
-   a skills-only bundle and materializes its members locally, then calls
-   the plugin's `install_bundle()` operation.
+   a bundle and materializes its content locally (including any non-skill
+   content in monolithic bundles), then calls the plugin's
+   `install_bundle()` operation.
 
 MLflow owns registry and source resolution plus the trace manifest. The
 package manager owns all harness-specific behavior, including directory
-placement and any package-manager or harness manifest generation. Users
-can request a target harness through MLflow, which passes that selection
-to the plugin. Users who only want to download content without installing
-it into a harness use the package-manager-free `mlflow skills pull`
-command.
+placement and any package-manager or harness manifest generation. Both
+installation commands require a `--harness` argument, which MLflow
+passes to the plugin. Users who only want to download content without
+installing it into a harness use the package-manager-free
+`mlflow skills pull` command.
 
-Two package-manager integration details require follow-up investigation
-before the Phase 1 installation contract is finalized:
+**Harness selection.** The `--harness` argument is required on both
+installation commands. While some package managers can auto-detect the
+target harness (APM scans for marker directories; Lola installs to all
+targets by default), detection behavior varies across plugins and can
+produce surprising results. A required argument keeps the MLflow
+interface predictable regardless of which plugin is configured.
 
-- **Harness selection:** Determine whether APM and Lola can reliably
-  detect the target harness when the caller does not specify one. If the
-  selected package managers provide this behavior, MLflow can leave the
-  harness argument optional; otherwise the installation commands must
-  require an explicit target harness.
-- **Reproducible installation:** Determine what lock-file or equivalent
-  reproducibility support APM and Lola provide. Based on those findings,
-  decide whether MLflow should rely on package-manager-owned lock data,
-  generate an intermediate install recipe, or define its own lock file.
+**Reproducible installation.** MLflow does not define its own lock file.
+Reproducibility support varies by package manager: APM provides a full
+lockfile (`apm.lock.yaml`) with resolved commits, content hashes, and
+integrity verification; Lola provides version-constraint files
+(`.lola-req`) and ref pinning but no lockfile. MLflow documents that
+reproducibility depends on the configured package manager plugin and
+recommends that production deployments choose a plugin with lockfile
+support.
 
 #### Package manager plugin interface
 
@@ -1038,7 +1049,7 @@ class PackageManagerPlugin:
         self,
         name: str,
         local_path: str,
-        harness: str | None = None,
+        harness: str,
         scope: str = "project",
     ) -> str:
         """Install a single skill from a local path.
@@ -1049,7 +1060,7 @@ class PackageManagerPlugin:
         self,
         bundle_name: str,
         member_paths: dict[str, str],
-        harness: str | None = None,
+        harness: str,
         scope: str = "project",
     ) -> str:
         """Install a bundle of skills from local paths.
@@ -1220,15 +1231,10 @@ New feature, not a breaking change. Phased rollout:
 
 - **Phase 1 (this RFC):** Skill and SkillBundle entities, store,
   REST API, SDK, CLI, UI, `mlflow skills pull`,
-  skills-only plugin import, package-manager-backed single-skill and
+  plugin import, package-manager-backed single-skill and
   bundle installation, the package manager plugin interface,
   `mlflow.skill_context()` for manual trace integration, the install-time
   trace manifest, and automatic SKILL spans in the Claude Code
   autologger.
-- **Phase 2 (follow-up RFC):** Extend skill bundles with non-skill
-  members (e.g., subagents, MCP server references).
-- **Phase 3 (follow-up):** Usage analytics dashboards, install count
-  tracking, cross-workspace export/import (following cross-registry
-  patterns), shared base extraction with the MCP registry, and richer
-  evaluation-to-skill query integration (e.g., filtering evaluation
-  results directly by skill version attributes).
+- **Phase 2 (follow-up RFC):** Add individual registry entries for
+  non-skill bundle members (e.g., subagents, MCP server references).

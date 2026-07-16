@@ -152,9 +152,9 @@ FK: `(workspace, bundle_name, bundle_version)` references
 with RESTRICT delete.
 
 The `member_type` column is included for forward compatibility with
-a follow-up RFC that will extend bundles to include non-skill members
-(e.g., subagents, MCP server references). In this RFC, all members
-have `member_type='skill'`.
+a follow-up RFC that will add registry entries for non-skill bundle
+members (e.g., subagents, MCP server references). In this RFC, all
+registered members have `member_type='skill'`.
 
 ### `skill_bundle_tags`
 
@@ -1030,37 +1030,42 @@ def import_bundle(
     source_type: str | None = None,
     subpath: str | None = None,
 ) -> PluginImportResult:
-    """Import a plugin as a monolithic skills-only bundle.
+    """Import a plugin as a monolithic bundle.
 
     Fetches and inspects the plugin in the client environment, registers
     discovered skills, preserves the plugin source on the bundle version,
-    and returns warnings for non-skill content that was skipped.
+    and returns warnings for non-skill content that is included in the
+    bundle but does not receive individual registry entries in Phase 1.
     """
 
 
 def install_skill(
     *,
     name: str,
+    harness: str,
     version: str | None = None,
     alias: str | None = None,
     package_manager: str | None = None,
-    harness: str | None = None,
     scope: str = "project",
 ) -> str:
-    """Resolve a skill and install it through a package manager plugin."""
+    """Resolve a skill and install it through a package manager plugin.
+    The harness argument is required to keep behavior predictable
+    across plugins."""
 
 
 def install_bundle(
     *,
     name: str,
+    harness: str,
     version: str | None = None,
     alias: str | None = None,
     package_manager: str | None = None,
-    harness: str | None = None,
     scope: str = "project",
 ) -> str:
-    """Resolve a skills-only bundle and install it through a package
-    manager plugin."""
+    """Resolve a bundle and install it through a package manager plugin.
+    For monolithic bundles, non-skill content is included in the
+    installed artifact. The harness argument is required to keep
+    behavior predictable across plugins."""
 
 
 def pull(
@@ -1336,7 +1341,7 @@ same operations from the command line:
 | `mlflow skills set-tag` | `set_skill_tag()` | Set a tag |
 | `mlflow skills pull` | `pull()` | Pull content to local filesystem |
 | `mlflow skills install` | `install_skill()` | Install one skill through a package manager plugin |
-| `mlflow skills install-bundle` | `install_bundle()` | Install a skills-only bundle through a package manager plugin |
+| `mlflow skills install-bundle` | `install_bundle()` | Install a bundle through a package manager plugin |
 | `mlflow skills create-bundle` | `create_skill_bundle()` | Create a skill bundle |
 | `mlflow skills create-bundle-version` | `create_skill_bundle_version()` | Create a bundle version with members |
 | `mlflow skills get-bundle` | `get_skill_bundle()` | Get bundle metadata |
@@ -1347,7 +1352,7 @@ same operations from the command line:
 | `mlflow skills set-bundle-version-tag` | `set_skill_bundle_version_tag()` | Set a bundle version tag |
 | `mlflow skills update-bundle-version` | `update_skill_bundle_version()` | Update bundle version status |
 | `mlflow skills introspect` | `introspect_bundle()` | Preview a local or remote plugin without registry writes |
-| `mlflow skills import` | `import_bundle()` | Import a plugin as a monolithic skills-only bundle |
+| `mlflow skills import` | `import_bundle()` | Import a plugin as a monolithic bundle |
 
 **Existing `mlflow skills` CLI group.** MLflow already has an
 `mlflow skills` CLI group (`mlflow/cli/skills.py`) with two
@@ -1414,7 +1419,7 @@ After registering the embedded skills, the importer creates one
 monolithic `SkillBundleVersion` with the original `source_type`,
 `source`, and `subpath`, plus member references for all discovered
 skills. This preserves a pullable link to the complete original plugin
-while keeping Phase 1 registry metadata skills-only.
+while keeping Phase 1 registry entries limited to skills.
 
 The import fails if no skills are discovered. It also preflights all
 target `(name, version)` pairs and fails if any skill or bundle version
@@ -1427,14 +1432,16 @@ renaming the conflicting skill before import.
 Subagents, hooks, MCP configurations, and unrecognized content remain
 in the plugin artifact but are not registered. Each discovered skipped
 category produces a `PluginImportWarning` containing its category,
-path, and an explanation that Phase 1 registers skills only. The CLI
+path, and an explanation that Phase 1 does not create registry entries
+for non-skill content (though the content remains in the bundle). The CLI
 prints these warnings after registration. The SDK returns them together
 with the created bundle and skill versions in `PluginImportResult`.
 
-Import only translates an existing plugin into MLflow's skills-only
-registry representation. It does not install the plugin, generate a
-downstream manifest, or translate an MLflow bundle into a downstream
-bundle format.
+Import translates an existing plugin into MLflow's registry
+representation, creating registry entries for discovered skills while
+preserving the complete plugin source. It does not install the plugin,
+generate a downstream manifest, or translate an MLflow bundle into a
+downstream bundle format.
 
 ## Package manager plugin interface
 
@@ -1442,11 +1449,11 @@ Package manager plugins are registered via Python entrypoints (group
 `mlflow.skill_package_managers`), so third-party plugins can be
 installed via `pip install` without modifying MLflow core.
 
-In Phase 1, these plugins receive only resolved skills or skills-only
-bundle members. They install those skills using an existing package
-manager, but they do not translate MLflow bundle definitions into
-downstream bundle formats. Generic translation for bundles containing
-non-skill members is deferred to the follow-up RFC.
+In Phase 1, these plugins receive resolved skills or bundle content
+(which may include non-skill content in monolithic bundles). They
+install the content using an existing package manager. The package
+manager handles placement of all content, including non-skill files
+that do not have individual registry entries.
 
 Both `mlflow skills install` and `mlflow skills install-bundle` require
 a package manager plugin. The caller can select a plugin explicitly, or
@@ -1462,7 +1469,7 @@ class PackageManagerPlugin:
         self,
         name: str,
         local_path: str,
-        harness: str | None = None,
+        harness: str,
         scope: str = "project",
     ) -> str:
         """Install a single skill from a local path.
@@ -1471,9 +1478,7 @@ class PackageManagerPlugin:
         Args:
             name: skill name for manifest generation
             local_path: local directory with skill content
-            harness: target harness (e.g., "claude-code", "cursor").
-                Behavior when omitted is pending investigation of APM
-                and Lola harness-detection capabilities.
+            harness: target harness (e.g., "claude-code", "cursor")
             scope: "project" (cwd) or "user" (home directory)
         """
         ...
@@ -1482,7 +1487,7 @@ class PackageManagerPlugin:
         self,
         bundle_name: str,
         member_paths: dict[str, str],
-        harness: str | None = None,
+        harness: str,
         scope: str = "project",
     ) -> str:
         """Install a bundle of skills from local paths.
@@ -1492,8 +1497,7 @@ class PackageManagerPlugin:
         Args:
             bundle_name: bundle name for manifest generation
             member_paths: {skill_name: local_path} for each member
-            harness: target harness. Behavior when omitted is pending
-                investigation of APM and Lola harness-detection capabilities.
+            harness: target harness (e.g., "claude-code", "cursor")
             scope: "project" or "user"
         """
         ...
