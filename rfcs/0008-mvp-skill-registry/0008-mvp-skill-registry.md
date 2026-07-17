@@ -1258,3 +1258,12 @@ New feature, not a breaking change. Phased rollout:
   autologger.
 - **Phase 2 (follow-up RFC):** Add individual registry entries for
   non-skill bundle members (e.g., subagents, MCP server references).
+
+# Open questions
+
+- **Security scan results.** Structured scan metadata on version
+  entities (scan type, pass/fail status, tool, date) would be valuable
+  for skill governance. However, the same need applies to MCP servers
+  (RFC-0004) and other registered assets. This should be addressed as a
+  cross-registry capability rather than a skill-specific feature, so
+  that all registries share a consistent scan result model.
