@@ -68,18 +68,19 @@ interface) that already support cross-harness skill installation.
 Existing Claude Code plugins can be imported as monolithic bundles:
 MLflow registers their discovered skills, preserves the plugin source,
 and warns about non-skill content that is pulled and installed alongside
-the skills but does not receive individual registry entries in Phase 1.
+the skills but does not receive individual registry entries.
 
 Trace integration supports both manual and automatic instrumentation.
 `mlflow.skill_context()` lets SDK applications create SKILL spans
-explicitly. For installed skills, the Phase 1 Claude Code autologger
+explicitly. For installed skills, the Claude Code autologger
 uses the install-time trace manifest to create SKILL spans automatically.
 Both paths annotate spans with registry coordinates, enabling adoption
 tracking, deprecation impact analysis, per-skill cost attribution, and
 regression detection.
 
-A follow-up RFC will add registry entries for non-skill bundle
-members (e.g., subagents, MCP server references).
+[RFC-0009: Extended Skill Bundles](https://github.com/mlflow/rfcs/pull/27)
+will add registry entries for non-skill bundle members (e.g., subagents,
+MCP server references).
 
 # Basic example
 
@@ -127,7 +128,7 @@ mlflow skills import \
 MLflow discovers and registers the plugin's skills as members of a
 monolithic bundle. It preserves the Git source on the bundle and warns
 about subagents, hooks, and MCP configurations that are not registered
-in Phase 1.
+as individual entities.
 
 ## Install and use
 
@@ -258,9 +259,9 @@ Registry enables. Each shows both CLI and UI paths.
    monolithic bundle version. The bundle retains the original plugin
    source pointer.
 4. If the plugin also contains subagents, hooks, or MCP configuration,
-   MLflow prints a warning that Phase 1 does not create individual
-   registry entries for non-skill content. The content remains in the
-   bundle and is included when the bundle is pulled or installed.
+   MLflow prints a warning that non-skill content does not receive
+   individual registry entries. The content remains in the bundle and
+   is included when the bundle is pulled or installed.
 5. The created bundle and skills are available through the same
    discovery, lifecycle, pull, and installation flows as manually
    registered entries.
@@ -477,8 +478,9 @@ discovery/search operations.
 
 - **Registry entries for non-skill content.** Bundles can contain
   non-skill content (e.g., subagents, MCP configurations) that is
-  pulled and installed alongside skills, but Phase 1 does not create
-  individual registry entries for non-skill members. A follow-up RFC
+  pulled and installed alongside skills, but this RFC does not create
+  individual registry entries for non-skill members.
+  [RFC-0009: Extended Skill Bundles](https://github.com/mlflow/rfcs/pull/27)
   will add those entries. The registry backend is designed to be
   extensible to these types.
 - **Artifact storage as the only path.** The registry supports both
@@ -570,9 +572,9 @@ members), and direct mapping to the harness plugin concept. Follows
 the same top-level pattern as Skill: versions, tags, aliases, and
 derived status.
 
-A follow-up RFC will add registry entries for non-skill bundle
-members (e.g., subagents, MCP server references), enabling full
-"plugin"-style bundles.
+[RFC-0009: Extended Skill Bundles](https://github.com/mlflow/rfcs/pull/27)
+will add registry entries for non-skill bundle members (e.g., subagents,
+MCP server references), enabling full "plugin"-style bundles.
 The member table schema includes a `member_type` field for forward
 compatibility with this extension.
 
@@ -702,7 +704,7 @@ This aligns with the MCP Server Registry (RFC-0004).
 
 `mlflow skills import` is a client-side convenience operation for
 registering an existing harness-specific plugin as a monolithic bundle.
-Phase 1 supports the Claude Code plugin layout.
+This RFC supports the Claude Code plugin layout.
 Additional input formats can be added later without changing the
 registry data model.
 
@@ -722,7 +724,7 @@ source fields preserve the original plugin location.
 
 Subagents, hooks, MCP configurations, and other non-skill content remain
 in the source artifact but are not registered as entities or members in
-Phase 1. The import result reports a warning for each skipped category.
+The import result reports a warning for each skipped category.
 Import does not install the plugin, generate a downstream manifest, or
 translate an MLflow bundle into another bundle format.
 
@@ -934,7 +936,7 @@ child of the SKILL span.
 
 #### Automatic harness instrumentation
 
-Phase 1 extends the Claude Code autologger to recognize skill
+This RFC extends the Claude Code autologger to recognize skill
 invocations and create SKILL spans automatically. The autologger reads
 the `mlflow-skills-manifest.json` written during installation, maps the
 harness-local skill name to its registered `{workspace, name, version}`
@@ -951,7 +953,7 @@ creation of a registry-linked SKILL span for that invocation.
 
 The manifest and instrumentation contract are harness-neutral so other
 harness autologgers can adopt them later, but Claude Code integration is
-the automatic tracing implementation delivered in Phase 1. See
+the automatic tracing implementation delivered in this RFC. See
 [implementation-details.md: Automatic trace
 instrumentation](implementation-details.md#automatic-trace-instrumentation).
 
@@ -992,12 +994,14 @@ installation. This avoids duplicating work that projects like
 [Lola](https://github.com/LobsterTrap/lola) already handle well, and
 lets the MLflow community benefit from their evolving harness support.
 
-The Phase 1 registry boundary is intentionally narrow. MLflow creates
+The registry boundary is intentionally narrow. MLflow creates
 registry entries only for skills within a bundle; non-skill content
 (e.g., subagents, MCP configurations) remains in the bundle source and
 is included when the bundle is pulled or installed, but does not receive
-individual registry entries. A follow-up RFC will add registry entries
-for non-skill member types. MLflow resolves bundles into concrete skill
+individual registry entries.
+[RFC-0009: Extended Skill Bundles](https://github.com/mlflow/rfcs/pull/27)
+will add registry entries for non-skill member types. MLflow resolves
+bundles into concrete skill
 sources or local paths, then passes those to an existing package manager
 for installation.
 
@@ -1119,7 +1123,7 @@ the resolution lock with the exact skill version and installation inputs.
 #### Trace manifest
 
 Both installation commands write an `mlflow-skills-manifest.json` file
-that records installed registry coordinates. In Phase 1, the Claude
+that records installed registry coordinates. The Claude
 Code autologger consumes this manifest for automatic SKILL span
 creation:
 
@@ -1176,7 +1180,7 @@ in [implementation-details.md](implementation-details.md).
   who do not install a package manager can still use `mlflow skills
   pull` for harness-agnostic content download.
 
-- **Automatic tracing coverage.** Phase 1 automatic instrumentation is
+- **Automatic tracing coverage.** Automatic instrumentation is
   implemented for Claude Code. Other harnesses can use manual
   `skill_context()` instrumentation until their autologgers adopt the
   manifest contract.
@@ -1246,18 +1250,20 @@ installation and harness-specific adaptation.
 
 # Adoption strategy
 
-New feature, not a breaking change. Phased rollout:
+New feature, not a breaking change. This RFC delivers Skill and
+SkillBundle entities, store, REST API, SDK, CLI, UI,
+`mlflow skills pull`, plugin import, package-manager-backed single-skill
+and bundle installation, the package manager plugin interface, the
+`mlflow-skills.lock` resolution lock, `mlflow.skill_context()` for
+manual trace integration, the install-time trace manifest, and automatic
+SKILL spans in the Claude Code autologger.
 
-- **Phase 1 (this RFC):** Skill and SkillBundle entities, store,
-  REST API, SDK, CLI, UI, `mlflow skills pull`,
-  plugin import, package-manager-backed single-skill and
-  bundle installation, the package manager plugin interface,
-  the `mlflow-skills.lock` resolution lock,
-  `mlflow.skill_context()` for manual trace integration, the install-time
-  trace manifest, and automatic SKILL spans in the Claude Code
-  autologger.
-- **Phase 2 (follow-up RFC):** Add individual registry entries for
-  non-skill bundle members (e.g., subagents, MCP server references).
+#### Future improvements
+
+- **Registry entries for non-skill bundle members.** Individual registry
+  entries for non-skill content (e.g., subagents, MCP server references)
+  are deferred to
+  [RFC-0009: Extended Skill Bundles](https://github.com/mlflow/rfcs/pull/27).
 
 # Open questions
 

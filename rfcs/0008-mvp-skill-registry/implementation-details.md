@@ -141,7 +141,7 @@ Semantic version ordering and index follow the same pattern as
 | `workspace` | `String(63)` | PK |
 | `bundle_name` | `String(256)` | PK, FK to `skill_bundle_versions` |
 | `bundle_version` | `String(256)` | PK, FK to `skill_bundle_versions` |
-| `member_type` | `String(20)` | PK; `skill` in Phase 1 (reserved for future extension) |
+| `member_type` | `String(20)` | PK; `skill` in this RFC (reserved for future extension) |
 | `member_name` | `String(256)` | PK |
 | `member_version` | `String(256)` | PK |
 | `member_subpath` | `String(2048)` | nullable; member path inside bundle artifact |
@@ -152,9 +152,10 @@ FK: `(workspace, bundle_name, bundle_version)` references
 with RESTRICT delete.
 
 The `member_type` column is included for forward compatibility with
-a follow-up RFC that will add registry entries for non-skill bundle
-members (e.g., subagents, MCP server references). In this RFC, all
-registered members have `member_type='skill'`.
+[RFC-0009: Extended Skill Bundles](https://github.com/mlflow/rfcs/pull/27),
+which will add registry entries for non-skill bundle members (e.g.,
+subagents, MCP server references). In this RFC, all registered members
+have `member_type='skill'`.
 
 ### `skill_bundle_tags`
 
@@ -430,7 +431,7 @@ version resolution follows the same fallback.
 
 ### SkillBundleVersion entity
 
-A versioned snapshot of a skill bundle's membership. In Phase 1, all
+A versioned snapshot of a skill bundle's membership. In this RFC, all
 members are skills.
 
 ```python
@@ -1059,7 +1060,7 @@ def import_bundle(
     Fetches and inspects the plugin in the client environment, registers
     discovered skills, preserves the plugin source on the bundle version,
     and returns warnings for non-skill content that is included in the
-    bundle but does not receive individual registry entries in Phase 1.
+    bundle but does not receive individual registry entries.
     """
 
 
@@ -1423,9 +1424,9 @@ sources use an explicit source type or the same unambiguous syntax
 inference as import. Introspection does not require the plugin to provide
 a name or version because those values are only required when importing.
 
-### Phase 1 input format
+### Supported input format
 
-Phase 1 supports the Claude Code plugin layout. The caller passes
+This RFC supports the Claude Code plugin layout. The caller passes
 `plugin_format="claude-code"`; automatic format detection and additional
 input formats are follow-up work. The importer:
 
@@ -1457,7 +1458,7 @@ After registering the embedded skills, the importer creates one
 monolithic `SkillBundleVersion` with the original `source_type`,
 `source`, and `subpath`, plus member references for all discovered
 skills. This preserves a pullable link to the complete original plugin
-while keeping Phase 1 registry entries limited to skills.
+while keeping registry entries limited to skills.
 
 The import fails if no skills are discovered. It also preflights all
 target `(name, version)` pairs and fails if any skill or bundle version
@@ -1470,7 +1471,7 @@ renaming the conflicting skill before import.
 Subagents, hooks, MCP configurations, and unrecognized content remain
 in the plugin artifact but are not registered. Each discovered skipped
 category produces a `PluginImportWarning` containing its category,
-path, and an explanation that Phase 1 does not create registry entries
+path, and an explanation that this RFC does not create registry entries
 for non-skill content (though the content remains in the bundle). The CLI
 prints these warnings after registration. The SDK returns them together
 with the created bundle and skill versions in `PluginImportResult`.
@@ -1517,7 +1518,7 @@ Package manager plugins are registered via Python entrypoints (group
 `mlflow.skill_package_managers`), so third-party plugins can be
 installed via `pip install` without modifying MLflow core.
 
-In Phase 1, these plugins receive resolved skills or bundle content
+These plugins receive resolved skills or bundle content
 (which may include non-skill content in monolithic bundles). They
 install the content using an existing package manager. The package
 manager handles placement of all content, including non-skill files
@@ -1692,7 +1693,7 @@ the registry.
 
 Automatic instrumentation uses the install-time
 `mlflow-skills-manifest.json` to map harness-local skill invocations to
-registered skill coordinates. Phase 1 implements this behavior in the
+registered skill coordinates. This RFC implements this behavior in the
 Claude Code autologger. The manifest format is harness-neutral so other
 harness integrations can adopt the same contract later.
 
@@ -1718,7 +1719,7 @@ the invoked-skill level.
 
 ### Claude Code invocation matching
 
-The Phase 1 Claude Code autologger matches harness skill invocations
+The Claude Code autologger matches harness skill invocations
 against manifest entries by skill name. When a match is found, it
 creates a span with:
 
