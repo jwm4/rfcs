@@ -310,14 +310,16 @@ Registry enables. Each shows both CLI and UI paths.
    mlflow skills-registry install --name code-review --alias production \
        --harness claude-code
    ```
-2. Run the agent. The harness loads the installed skills during a
+2. Ensure MLflow tracing is enabled for the target harness
+   (e.g., `mlflow autolog claude` for Claude Code).
+3. Run the agent. The harness loads the installed skills during a
    conversation.
-3. Open the MLflow UI and navigate to the Traces page. Click the
+4. Open the MLflow UI and navigate to the Traces page. Click the
    "Skills" tab to filter for traces with SKILL spans.
-4. Find the trace for the agent run. Skill invocations appear as
+5. Find the trace for the agent run. Skill invocations appear as
    SKILL spans in the trace tree, annotated with registry coordinates
    (skill name, version, workspace).
-5. Click a SKILL span to see which registered skill version was used
+6. Click a SKILL span to see which registered skill version was used
    and how long it took. Click the skill name link to navigate to the
    skill's registry detail page.
 
