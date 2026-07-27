@@ -1369,8 +1369,8 @@ provides the same operations from the command line:
 | `mlflow skills-registry set-alias` | `set_skill_alias()` | Set a version alias |
 | `mlflow skills-registry set-tag` | `set_skill_tag()` | Set a tag |
 | `mlflow skills-registry pull` | `pull()` | Pull content to local filesystem |
-| `mlflow skills-registry install` | `install_skill()` | Install one skill through a package manager plugin |
-| `mlflow skills-registry bundles install` | `install_bundle()` | Install a bundle through a package manager plugin |
+| `mlflow skills-registry install` | `install_skill()` | Install one skill through a package manager plugin; `--local-path` skips fetch |
+| `mlflow skills-registry bundles install` | `install_bundle()` | Install a bundle through a package manager plugin; `--local-path` skips fetch |
 | `mlflow skills-registry install --from-lock` | `install_from_lock()` | Replay exact registry versions from an MLflow resolution lock |
 | `mlflow skills-registry bundles create` | `create_skill_bundle()` | Create a skill bundle |
 | `mlflow skills-registry bundles create-version` | `create_skill_bundle_version()` | Create a bundle version with members |

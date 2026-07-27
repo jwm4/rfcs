@@ -1020,9 +1020,25 @@ MLflow owns registry and source resolution plus the trace manifest. The
 package manager owns all harness-specific behavior, including directory
 placement and any package-manager or harness manifest generation. Both
 installation commands require a `--harness` argument, which MLflow
-passes to the plugin. Users who only want to download content without
-installing it into a harness use the package-manager-free
-`mlflow skills-registry pull` command.
+passes to the plugin. Both also accept an optional `--local-path`
+argument pointing to previously pulled content, which skips the fetch
+from source and passes the local path directly to the package manager.
+Users who only want to download content without installing it into a
+harness use the package-manager-free `mlflow skills-registry pull`
+command.
+
+**Why MLflow materializes locally.** MLflow resolves registry
+coordinates (versions, aliases, workspaces) and fetches content from the
+source before passing local paths to the package manager. This design
+choice has two benefits. First, registry resolution stays in MLflow, so
+every package manager plugin resolves aliases and versions the same way
+without needing to interact with the registry API. Second, the registry
+supports multiple source types (Git repos, OCI registries, ZIP archives,
+MLflow artifact storage), and materializing locally means plugins only
+need to handle local paths, not implement fetching logic for every source
+type. The tradeoff is that package managers with their own remote source
+capabilities (e.g., Git-aware caching or shallow clones) cannot apply
+those optimizations when MLflow has already fetched the content.
 
 **Harness selection.** The `--harness` argument is required on both
 installation commands. While some package managers can auto-detect the
