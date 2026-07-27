@@ -1031,13 +1031,22 @@ the MLflow interface predictable regardless of which plugin is
 configured.
 
 **Reproducible installation.** MLflow defines a small resolution lock,
-`mlflow-skills.lock`, that records the exact registry coordinates and
-installation inputs selected by an install command: entity type, name,
-resolved version, workspace, package manager, harness, and scope. Aliases
-are resolved before they are written. Passing `--lock-file` to either
-installation command writes or updates this file; `mlflow skills-registry
-install --from-lock` replays it by resolving the pinned registry versions
-and delegating them to the recorded package manager.
+`mlflow-skills.lock`, that records the tracking server URL and the exact
+registry coordinates and installation inputs selected by an install
+command: entity type, name, resolved version, workspace, package manager,
+harness, and scope. Aliases are resolved before they are written. Passing
+`--lock-file` to either installation command writes or updates this file;
+`mlflow skills-registry install --from-lock` replays it by connecting to
+the recorded tracking server, resolving the pinned registry versions, and
+delegating them to the recorded package manager.
+
+**Cached content.** When MLflow materializes skill content during
+installation, it stores the pulled content in `.mlflow-skills/` at the
+project root. This fixed path convention allows teams to commit pulled
+skills to version control so that collaborators can install from the
+local copy without needing registry access. The package manager plugin
+receives paths within this directory and installs content into the
+harness-specific location.
 
 Package-manager lockfiles complement the MLflow resolution lock rather
 than replace it. APM provides `apm.lock.yaml` with resolved commits and
@@ -1045,6 +1054,10 @@ content hashes. Lola provides version-constraint files (`.lola-req`) and
 ref pinning but no lockfile. The MLflow lock makes registry resolution
 reproducible across both plugins; a package-manager lock can additionally
 capture package-manager-specific layout and integrity information.
+Package manager plugins may write their native lockfile as part of the
+install operation. Combined with the cached content in `.mlflow-skills/`,
+this allows collaborators to use the package manager directly without
+needing MLflow or registry access.
 
 #### Package manager plugin interface
 
@@ -1082,7 +1095,18 @@ class PackageManagerPlugin:
     def supported_harnesses(self) -> list[str]:
         """Return list of harness identifiers this plugin supports."""
         ...
+
+    def check_requirements(self) -> PackageManagerCheckResult:
+        """Verify the package manager is installed and meets minimum
+        version requirements. Called before install operations."""
+        ...
 ```
+
+**Discovering installed plugins.** `mlflow skills-registry
+list-package-managers` enumerates the package manager plugins
+registered via the `mlflow.skill_package_managers` entrypoint group
+and calls `supported_harnesses()` on each one, displaying both the
+available package managers and the harnesses they support.
 
 #### Source resolution flow
 
@@ -1093,7 +1117,7 @@ When `mlflow skills-registry bundles install` is invoked:
 2. MLflow materializes a local path for each member skill according to
    the bundle kind:
    - For an assembled bundle, MLflow pulls each member from its own
-     source to a local temporary directory.
+     source to `.mlflow-skills/`.
    - For a monolithic bundle, MLflow pulls the bundle source once and
      retains the complete pulled root as `bundle_path`, including opaque
      non-skill content, while resolving each skill path from that root
@@ -1109,7 +1133,7 @@ When `mlflow skills-registry bundles install` is invoked:
    bundle version and installation inputs.
 
 When `mlflow skills-registry install` is invoked for a single skill, MLflow
-resolves the version, pulls its content to a local temporary directory,
+resolves the version, pulls its content to `.mlflow-skills/`,
 passes that path to the configured plugin's `install_skill()` operation,
 and writes the trace manifest using the harness-local name returned by
 the plugin after installation succeeds. If requested, it then updates

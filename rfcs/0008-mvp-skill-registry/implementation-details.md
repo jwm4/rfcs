@@ -1383,6 +1383,7 @@ provides the same operations from the command line:
 | `mlflow skills-registry bundles update-version` | `update_skill_bundle_version()` | Update bundle version status |
 | `mlflow skills-registry bundles introspect` | `introspect_bundle()` | Preview a local or remote plugin without registry writes |
 | `mlflow skills-registry bundles import` | `import_bundle()` | Import a plugin as a monolithic bundle |
+| `mlflow skills-registry list-package-managers` | `list_package_managers()` | List installed package manager plugins and their supported harnesses |
 
 **Relationship to existing `mlflow skills` CLI group.** MLflow already
 has an `mlflow skills` CLI group (`mlflow/cli/skills.py`) with two
@@ -1478,16 +1479,19 @@ versions produced those paths. When `lock_file` is supplied to
 `install_skill()` or `install_bundle()`, MLflow writes or updates an
 `mlflow-skills.lock` resolution lock after installation succeeds.
 
-Each entry records the entity type (`skill` or `bundle`), name, exact
-resolved version, workspace, selected package manager, harness, and
-scope. Aliases and `latest` are resolved before writing the entry and
-are never stored in place of a version. A bundle entry does not repeat
+The lock file records the tracking server URL used to resolve the
+entries, so `install --from-lock` can connect to the correct server
+without requiring the user to configure it separately. Each entry
+records the entity type (`skill` or `bundle`), name, exact resolved
+version, workspace, selected package manager, harness, and scope.
+Aliases and `latest` are resolved before writing the entry and are
+never stored in place of a version. A bundle entry does not repeat
 its members because bundle membership is immutable and can be recovered
 from the exact bundle version.
 
-A resolution lock is scoped to one workspace. Appending an entry from a
-different workspace fails, and replay requires the configured MLflow
-client to target the recorded workspace.
+A resolution lock is scoped to one workspace and one tracking server.
+Appending an entry from a different workspace fails, and replay
+connects to the recorded tracking server.
 
 `install_from_lock()` reads the entries, resolves the exact versions
 through the currently configured MLflow client, materializes their
@@ -1573,6 +1577,11 @@ class PackageManagerPlugin:
         """Return list of harness identifiers this plugin supports.
         E.g., ["claude-code", "cursor", "codex-cli", "copilot"]."""
         ...
+
+    def check_requirements(self) -> PackageManagerCheckResult:
+        """Verify the package manager is installed and meets minimum
+        version requirements. Called before install operations."""
+        ...
 ```
 
 ### Entrypoint registration
@@ -1592,7 +1601,7 @@ When `mlflow skills-registry bundles install` is invoked:
    resolution) to obtain the bundle version and its member list.
 2. **Materialize member paths:**
    - For an assembled bundle, MLflow pulls each member skill to its own
-     local temporary directory using source-type-aware logic (Git clone,
+     subdirectory under `.mlflow-skills/` using source-type-aware logic (Git clone,
      OCI pull, ZIP download, or MLflow artifact download).
    - For a monolithic bundle, MLflow pulls the bundle-level source once
      using the same source-type-aware logic and retains the complete root
