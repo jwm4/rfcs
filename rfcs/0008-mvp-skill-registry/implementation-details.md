@@ -1378,19 +1378,19 @@ provides the same operations from the command line:
 | `mlflow skills-registry set-tag` | `set_skill_tag()` | Set a tag |
 | `mlflow skills-registry pull` | `pull()` | Pull content to local filesystem |
 | `mlflow skills-registry install` | `install_skill()` | Install one skill through a package manager plugin |
-| `mlflow skills-registry install-bundle` | `install_bundle()` | Install a bundle through a package manager plugin |
+| `mlflow skills-registry bundles install` | `install_bundle()` | Install a bundle through a package manager plugin |
 | `mlflow skills-registry install --from-lock` | `install_from_lock()` | Replay exact registry versions from an MLflow resolution lock |
-| `mlflow skills-registry create-bundle` | `create_skill_bundle()` | Create a skill bundle |
-| `mlflow skills-registry create-bundle-version` | `create_skill_bundle_version()` | Create a bundle version with members |
-| `mlflow skills-registry get-bundle` | `get_skill_bundle()` | Get bundle metadata |
-| `mlflow skills-registry search-bundles` | `search_skill_bundles()` | Search bundles |
-| `mlflow skills-registry search-bundle-versions` | `search_skill_bundle_versions()` | Search bundle versions |
-| `mlflow skills-registry set-bundle-alias` | `set_skill_bundle_alias()` | Set a bundle alias |
-| `mlflow skills-registry set-bundle-tag` | `set_skill_bundle_tag()` | Set a bundle-level tag |
-| `mlflow skills-registry set-bundle-version-tag` | `set_skill_bundle_version_tag()` | Set a bundle version tag |
-| `mlflow skills-registry update-bundle-version` | `update_skill_bundle_version()` | Update bundle version status |
-| `mlflow skills-registry introspect` | `introspect_bundle()` | Preview a local or remote plugin without registry writes |
-| `mlflow skills-registry import` | `import_bundle()` | Import a plugin as a monolithic bundle |
+| `mlflow skills-registry bundles create` | `create_skill_bundle()` | Create a skill bundle |
+| `mlflow skills-registry bundles create-version` | `create_skill_bundle_version()` | Create a bundle version with members |
+| `mlflow skills-registry bundles get` | `get_skill_bundle()` | Get bundle metadata |
+| `mlflow skills-registry bundles search` | `search_skill_bundles()` | Search bundles |
+| `mlflow skills-registry bundles search-versions` | `search_skill_bundle_versions()` | Search bundle versions |
+| `mlflow skills-registry bundles set-alias` | `set_skill_bundle_alias()` | Set a bundle alias |
+| `mlflow skills-registry bundles set-tag` | `set_skill_bundle_tag()` | Set a bundle-level tag |
+| `mlflow skills-registry bundles set-version-tag` | `set_skill_bundle_version_tag()` | Set a bundle version tag |
+| `mlflow skills-registry bundles update-version` | `update_skill_bundle_version()` | Update bundle version status |
+| `mlflow skills-registry bundles introspect` | `introspect_bundle()` | Preview a local or remote plugin without registry writes |
+| `mlflow skills-registry bundles import` | `import_bundle()` | Import a plugin as a monolithic bundle |
 
 **Relationship to existing `mlflow skills` CLI group.** MLflow already
 has an `mlflow skills` CLI group (`mlflow/cli/skills.py`) with two
@@ -1409,7 +1409,7 @@ The registry server does not fetch user-supplied plugin URLs.
 
 ### Read-only preview
 
-`introspect_bundle()` and `mlflow skills-registry introspect` run the same plugin
+`introspect_bundle()` and `mlflow skills-registry bundles introspect` run the same plugin
 discovery used by import but do not create or modify registry records.
 They accept either a local path or a remote Git, OCI, ZIP, or MLflow
 artifact source and return the discovered skill names and paths,
@@ -1526,7 +1526,7 @@ requested registry skill; missing or duplicate mappings fail the install
 before MLflow writes its trace manifest or resolution lock.
 
 Both `mlflow skills-registry install` and `mlflow skills-registry
-install-bundle` require a package manager plugin. The caller can select
+bundles install` require a package manager plugin. The caller can select
 a plugin explicitly, or MLflow uses the configured default. If no plugin
 is selected or available, installation fails with guidance to install or
 configure one; `mlflow skills-registry pull` remains available without a
@@ -1594,7 +1594,7 @@ lola = "lola_mlflow:LolaPlugin"
 
 ### Bundle installation flow
 
-When `mlflow skills-registry install-bundle` is invoked:
+When `mlflow skills-registry bundles install` is invoked:
 
 1. **Resolve:** MLflow calls `get_skill_bundle_version()` (or alias
    resolution) to obtain the bundle version and its member list.
