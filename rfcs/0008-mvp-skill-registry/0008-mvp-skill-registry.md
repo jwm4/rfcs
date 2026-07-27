@@ -43,15 +43,13 @@ on top of existing distribution mechanisms: lifecycle management,
 usage analytics via traces, and federated discovery across sources.
 
 The registry manages two entity types under the `mlflow.genai` SDK
-namespace (CLI: `mlflow skills`), following the top-level public SDK
-pattern established by the MCP Server Registry (RFC-0004). Each has
-full lifecycle (versioning, aliases, tags, status). Note: MLflow already has an
-`mlflow skills` CLI group with `list` and `view` subcommands for
-inspecting bundled Assistant skills. The registry subcommands
-(`register`, `pull`, `install`, etc.) extend this existing group;
-none of the new subcommand names conflict with the existing ones.
-See [implementation-details.md: Python SDK and
-CLI](implementation-details.md#python-sdk-and-cli) for details.
+namespace (CLI: `mlflow skills-registry`), following the top-level
+public SDK pattern established by the MCP Server Registry (RFC-0004).
+Each has full lifecycle (versioning, aliases, tags, status). The
+registry uses a separate `mlflow skills-registry` CLI group to avoid
+confusion with the existing `mlflow skills` group, which inspects
+bundled Assistant skills. See [implementation-details.md: Python SDK
+and CLI](implementation-details.md#python-sdk-and-cli) for details.
 The two entity types are:
 
 - **Skills**: a directory containing a SKILL.md entry point plus
@@ -61,7 +59,7 @@ The two entity types are:
 - **Skill bundles**: versioned collections that group related skills
   into a single governed, installable unit
 
-`mlflow skills pull` provides a harness-agnostic way to fetch
+`mlflow skills-registry pull` provides a harness-agnostic way to fetch
 registered content from its source. Harness-specific installation
 delegates to package managers (APM, Lola, or others via a plugin
 interface) that already support cross-harness skill installation.
@@ -117,7 +115,7 @@ mlflow.genai.create_skill_bundle_version(
 ## Import an existing plugin
 
 ```bash
-mlflow skills import \
+mlflow skills-registry import \
     --source https://github.com/acme/plugins.git@v1.0.0 \
     --subpath pr-workflow \
     --plugin-format claude-code \
@@ -134,11 +132,11 @@ as individual entities.
 
 ```bash
 # Install a skill bundle for Claude Code via a package manager
-mlflow skills install-bundle --name pr-workflow --alias production \
+mlflow skills-registry install-bundle --name pr-workflow --alias production \
     --harness claude-code
 
 # Or install a single skill through the same package-manager layer
-mlflow skills install --name code-review --alias production \
+mlflow skills-registry install --name code-review --alias production \
     --harness claude-code
 ```
 
@@ -196,10 +194,10 @@ Registry enables. Each shows both CLI and UI paths.
 
 1. Register individual skill versions pointing to their sources:
    ```bash
-   mlflow skills register --name code-review --version 1.0.0 \
+   mlflow skills-registry register --name code-review --version 1.0.0 \
        --source https://github.com/acme/agent-skills.git@v1.0.0 \
        --subpath code-review
-   mlflow skills register --name style-check --version 2.0.0 \
+   mlflow skills-registry register --name style-check --version 2.0.0 \
        --source https://github.com/acme/agent-skills.git@v2.0.0 \
        --subpath style-check
    ```
@@ -220,7 +218,7 @@ Registry enables. Each shows both CLI and UI paths.
    fill in name, version, source type, and source URL, then submit.
 2. Create a skill bundle version that pins these members:
    ```bash
-   mlflow skills create-bundle-version --name pr-workflow --version 1.0.0 \
+   mlflow skills-registry create-bundle-version --name pr-workflow --version 1.0.0 \
        --skill code-review:1.0.0 \
        --skill style-check:2.0.0
    ```
@@ -228,14 +226,14 @@ Registry enables. Each shows both CLI and UI paths.
    add members by searching and selecting from registered skills.
 3. Transition the bundle version from draft to active:
    ```bash
-   mlflow skills update-bundle-version --name pr-workflow \
+   mlflow skills-registry update-bundle-version --name pr-workflow \
        --version 1.0.0 --status active
    ```
    **UI path:** Open the bundle version detail page, use the status
    dropdown to change from "draft" to "active."
 4. Set an alias for stable downstream resolution:
    ```bash
-   mlflow skills set-bundle-alias --name pr-workflow \
+   mlflow skills-registry set-bundle-alias --name pr-workflow \
        --alias production --version 1.0.0
    ```
    **UI path:** In the bundle detail page, click "Add Alias" and map
@@ -245,7 +243,7 @@ Registry enables. Each shows both CLI and UI paths.
 
 1. Import a Claude Code plugin from a remotely accessible source:
    ```bash
-   mlflow skills import \
+   mlflow skills-registry import \
        --source https://github.com/acme/plugins.git@v1.0.0 \
        --subpath pr-workflow \
        --plugin-format claude-code \
@@ -270,7 +268,7 @@ Registry enables. Each shows both CLI and UI paths.
 
 1. Search the registry by keyword:
    ```bash
-   mlflow skills search --filter "name LIKE '%review%'" --status active
+   mlflow skills-registry search --filter "name LIKE '%review%'" --status active
    ```
    **UI path:** Navigate to the Skills page, type "review" in the
    search bar, and filter by status "active" using the dropdown.
@@ -281,18 +279,18 @@ Registry enables. Each shows both CLI and UI paths.
    tags.
 3. Get details on a promising result:
    ```bash
-   mlflow skills get --name code-review
+   mlflow skills-registry get --name code-review
    ```
    **UI path:** Click a card to open the detail view with metadata,
    version history, aliases, tags, and bundle memberships.
 4. Inspect a specific version's source and metadata:
    ```bash
-   mlflow skills get-version --name code-review --version 1.0.0
+   mlflow skills-registry get-version --name code-review --version 1.0.0
    ```
 5. Pull the skill locally to read the content and decide whether
    it fits:
    ```bash
-   mlflow skills pull --name code-review --version 1.0.0 \
+   mlflow skills-registry pull --name code-review --version 1.0.0 \
        --destination ./review-skill
    ```
 
@@ -300,7 +298,7 @@ Registry enables. Each shows both CLI and UI paths.
 
 1. Install the bundle using a package manager plugin:
    ```bash
-   mlflow skills install-bundle --name pr-workflow --alias production \
+   mlflow skills-registry install-bundle --name pr-workflow --alias production \
        --harness claude-code
    ```
    This resolves the bundle from the registry, pulls the bundle
@@ -309,7 +307,7 @@ Registry enables. Each shows both CLI and UI paths.
    manifest (`mlflow-skills-manifest.json`) with installed registry
    coordinates. A single skill uses the same package-manager layer:
    ```bash
-   mlflow skills install --name code-review --alias production \
+   mlflow skills-registry install --name code-review --alias production \
        --harness claude-code
    ```
 2. Run the agent. The harness loads the installed skills during a
@@ -333,10 +331,10 @@ analyze how skills were used during an agent run.
 
 1. Register a new version of the bundle with updated members:
    ```bash
-   mlflow skills register --name code-review --version 2.0.0 \
+   mlflow skills-registry register --name code-review --version 2.0.0 \
        --source https://github.com/acme/agent-skills.git@v2.0.0 \
        --subpath code-review
-   mlflow skills create-bundle-version --name pr-workflow --version 2.0.0 \
+   mlflow skills-registry create-bundle-version --name pr-workflow --version 2.0.0 \
        --skill code-review:2.0.0 \
        --skill style-check:2.0.0
    ```
@@ -352,9 +350,9 @@ analyze how skills were used during an agent run.
 6. If v2.0.0 is better, transition it to active and update the
    production alias:
    ```bash
-   mlflow skills update-bundle-version --name pr-workflow \
+   mlflow skills-registry update-bundle-version --name pr-workflow \
        --version 2.0.0 --status active
-   mlflow skills set-bundle-alias --name pr-workflow \
+   mlflow skills-registry set-bundle-alias --name pr-workflow \
        --alias production --version 2.0.0
    ```
 
@@ -369,7 +367,7 @@ runs the agent without the skill installed.
    are recorded in MLflow under experiment A (baseline).
 2. Install the skill:
    ```bash
-   mlflow skills install --name code-review --alias production \
+   mlflow skills-registry install --name code-review --alias production \
        --harness claude-code
    ```
 3. Run the same agent on the same test inputs. Traces are recorded
@@ -448,10 +446,10 @@ follow-up work (see [Adoption strategy](#adoption-strategy)).
    source repo.
 2. The job registers a new skill version from the updated source:
    ```bash
-   mlflow skills register --name code-review --version 1.1.0 \
+   mlflow skills-registry register --name code-review --version 1.1.0 \
        --source https://github.com/acme/agent-skills.git@v1.1.0 \
        --subpath code-review
-   mlflow skills create-bundle-version --name pr-workflow --version 1.1.0 \
+   mlflow skills-registry create-bundle-version --name pr-workflow --version 1.1.0 \
        --skill code-review:1.1.0 \
        --skill style-check:2.0.0
    ```
@@ -702,13 +700,13 @@ This aligns with the MCP Server Registry (RFC-0004).
 
 ### Plugin import
 
-`mlflow skills import` is a client-side convenience operation for
+`mlflow skills-registry import` is a client-side convenience operation for
 registering an existing harness-specific plugin as a monolithic bundle.
 This RFC supports the Claude Code plugin layout.
 Additional input formats can be added later without changing the
 registry data model.
 
-Before importing, users can call `mlflow skills introspect` or the SDK
+Before importing, users can call `mlflow skills-registry introspect` or the SDK
 `introspect_bundle()` function to preview the skills and unregistered
 non-skill content that MLflow discovers. Introspection is read-only,
 accepts either a local path or a remotely accessible source, and does not
@@ -1010,11 +1008,11 @@ for installation.
 Both harness-aware installation commands delegate to a configured
 package manager plugin:
 
-1. **Single-skill install** (`mlflow skills install`): MLflow resolves
+1. **Single-skill install** (`mlflow skills-registry install`): MLflow resolves
    one registered skill and materializes its content locally, then calls
    the plugin's `install_skill()` operation.
 
-2. **Bundle install** (`mlflow skills install-bundle`): MLflow resolves
+2. **Bundle install** (`mlflow skills-registry install-bundle`): MLflow resolves
    a bundle and materializes its content locally (including any non-skill
    content in monolithic bundles), then calls the plugin's
    `install_bundle()` operation.
@@ -1025,7 +1023,7 @@ placement and any package-manager or harness manifest generation. Both
 installation commands require a `--harness` argument, which MLflow
 passes to the plugin. Users who only want to download content without
 installing it into a harness use the package-manager-free
-`mlflow skills pull` command.
+`mlflow skills-registry pull` command.
 
 **Harness selection.** The `--harness` argument is required on both
 installation commands. While some package managers can auto-detect the
@@ -1040,7 +1038,7 @@ configured.
 installation inputs selected by an install command: entity type, name,
 resolved version, workspace, package manager, harness, and scope. Aliases
 are resolved before they are written. Passing `--lock-file` to either
-installation command writes or updates this file; `mlflow skills
+installation command writes or updates this file; `mlflow skills-registry
 install --from-lock` replays it by resolving the pinned registry versions
 and delegating them to the recorded package manager.
 
@@ -1091,7 +1089,7 @@ class PackageManagerPlugin:
 
 #### Source resolution flow
 
-When `mlflow skills install-bundle` is invoked:
+When `mlflow skills-registry install-bundle` is invoked:
 
 1. MLflow resolves the bundle version from the registry (by name +
    version or alias).
@@ -1113,7 +1111,7 @@ When `mlflow skills install-bundle` is invoked:
 5. If requested, MLflow updates the resolution lock with the exact
    bundle version and installation inputs.
 
-When `mlflow skills install` is invoked for a single skill, MLflow
+When `mlflow skills-registry install` is invoked for a single skill, MLflow
 resolves the version, pulls its content to a local temporary directory,
 passes that path to the configured plugin's `install_skill()` operation,
 and writes the trace manifest using the harness-local name returned by
@@ -1177,8 +1175,8 @@ in [implementation-details.md](implementation-details.md).
 
 - **Package manager dependency.** Full harness-specific installation
   requires a package manager plugin (APM, Lola, or similar). Users
-  who do not install a package manager can still use `mlflow skills
-  pull` for harness-agnostic content download.
+  who do not install a package manager can still use `mlflow
+  skills-registry pull` for harness-agnostic content download.
 
 - **Automatic tracing coverage.** Automatic instrumentation is
   implemented for Claude Code. Other harnesses can use manual
@@ -1252,7 +1250,7 @@ installation and harness-specific adaptation.
 
 New feature, not a breaking change. This RFC delivers Skill and
 SkillBundle entities, store, REST API, SDK, CLI, UI,
-`mlflow skills pull`, plugin import, package-manager-backed single-skill
+`mlflow skills-registry pull`, plugin import, package-manager-backed single-skill
 and bundle installation, the package manager plugin interface, the
 `mlflow-skills.lock` resolution lock, `mlflow.skill_context()` for
 manual trace integration, the install-time trace manifest, and automatic
