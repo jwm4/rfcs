@@ -41,6 +41,7 @@ workspace-scoped.
 | `source` | `String(2048)` | nullable pointer to skill content |
 | `subpath` | `String(2048)` | nullable; path within the artifact |
 | `content_digest` | `String(512)` | optional integrity digest |
+| `install_count` | `BigInteger` | default `0`; incremented server-side on each install |
 | `status` | `String(20)` | default `'draft'` |
 | `created_by` | `String(256)` | |
 | `last_updated_by` | `String(256)` | |
@@ -124,6 +125,7 @@ because the major/minor/patch prefix provides sufficient pruning.
 | `source` | `String(2048)` | optional pointer to bundle artifact |
 | `subpath` | `String(2048)` | nullable; path within the artifact |
 | `content_digest` | `String(512)` | optional integrity digest |
+| `install_count` | `BigInteger` | default `0`; incremented server-side on each install |
 | `status` | `String(20)` | default `'draft'` |
 | `created_by` | `String(256)` | |
 | `last_updated_by` | `String(256)` | |

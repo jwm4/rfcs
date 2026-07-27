@@ -250,8 +250,9 @@ Registry enables. Each shows both CLI and UI paths.
        --bundle-name pr-workflow \
        --version 1.0.0
    ```
-2. MLflow fetches the plugin in the client environment and discovers
-   directories containing SKILL.md entry points.
+2. MLflow fetches the plugin to a temporary directory in the client
+   environment, discovers directories containing SKILL.md entry points,
+   and cleans up the temporary copy after registration completes.
 3. MLflow registers each discovered skill as an embedded, source-less
    skill version and records its path as `member_subpath` in a new
    monolithic bundle version. The bundle retains the original plugin
@@ -553,6 +554,9 @@ new version. The optional `subpath` field identifies content within a
 shared artifact (used with Git, OCI, and ZIP). The optional
 `content_digest` field enables integrity verification.
 
+Each version tracks an `install_count` that the server increments on
+each `install` call, enabling popularity-based discovery.
+
 `register_skill()` creates the parent Skill when needed and otherwise
 reuses the existing parent. If the target `(name, version)` already
 exists, registration fails with an error. This matches the MCP Server
@@ -719,9 +723,9 @@ source pointers, and records each directory as the membership
 `member_subpath`. It then creates a monolithic bundle version whose
 source fields preserve the original plugin location.
 
-Subagents, hooks, MCP configurations, and other non-skill content remain
-in the source artifact but are not registered as entities or members in
-The import result reports a warning for each skipped category.
+Non-skill content remains in the source artifact but is not registered
+as entities or members. The import result reports any unrecognized
+content types so that the user is aware of what was not registered.
 Import does not install the plugin, generate a downstream manifest, or
 translate an MLflow bundle into another bundle format.
 
@@ -824,6 +828,7 @@ displays:
 - Status badge with color coding: draft (gray), active (green),
   deprecated (amber)
 - Source type indicator (Git, OCI, ZIP, MLflow)
+- Install count
 - Tag chips
 
 The filter bar provides:
@@ -1019,8 +1024,9 @@ package manager plugin:
 MLflow owns registry and source resolution plus the trace manifest. The
 package manager owns all harness-specific behavior, including directory
 placement and any package-manager or harness manifest generation. Both
-installation commands require a `--harness` argument, which MLflow
-passes to the plugin. Both also accept an optional `--local-path`
+installation commands increment the server-side install count for each
+installed skill version, and both require a `--harness` argument, which
+MLflow passes to the plugin. Both also accept an optional `--local-path`
 argument pointing to previously pulled content, which skips the fetch
 from source and passes the local path directly to the package manager.
 Users who only want to download content without installing it into a
