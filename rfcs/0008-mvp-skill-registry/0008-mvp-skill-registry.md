@@ -526,7 +526,6 @@ SkillBundleVersion ||--o{ SkillBundleVersionMember : "has members"
 SkillBundleVersionMember }o--|| SkillVersion : "skill member"
 
 SkillBundleVersionMember {
-  string member_type
   string member_name
   string member_version
   string member_subpath
@@ -573,8 +572,6 @@ derived status.
 [RFC-0009: Extended Skill Bundles](https://github.com/mlflow/rfcs/pull/27)
 will add registry entries for non-skill bundle members (e.g., subagents,
 MCP server references), enabling full "plugin"-style bundles.
-The member table schema includes a `member_type` field for forward
-compatibility with this extension.
 
 #### SkillBundleVersion
 

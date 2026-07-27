@@ -141,21 +141,13 @@ Semantic version ordering and index follow the same pattern as
 | `workspace` | `String(63)` | PK |
 | `bundle_name` | `String(256)` | PK, FK to `skill_bundle_versions` |
 | `bundle_version` | `String(256)` | PK, FK to `skill_bundle_versions` |
-| `member_type` | `String(20)` | PK; `skill` in this RFC (reserved for future extension) |
 | `member_name` | `String(256)` | PK |
 | `member_version` | `String(256)` | PK |
 | `member_subpath` | `String(2048)` | nullable; member path inside bundle artifact |
 
 FK: `(workspace, bundle_name, bundle_version)` references
-`skill_bundle_versions`, CASCADE delete. When `member_type` is
-`skill`, a FK to `skill_versions` enforces referential integrity
-with RESTRICT delete.
-
-The `member_type` column is included for forward compatibility with
-[RFC-0009: Extended Skill Bundles](https://github.com/mlflow/rfcs/pull/27),
-which will add registry entries for non-skill bundle members (e.g.,
-subagents, MCP server references). In this RFC, all registered members
-have `member_type='skill'`.
+`skill_bundle_versions`, CASCADE delete. A FK to `skill_versions`
+enforces referential integrity with RESTRICT delete.
 
 ### `skill_bundle_tags`
 
