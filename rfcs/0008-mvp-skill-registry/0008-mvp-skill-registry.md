@@ -425,23 +425,20 @@ traces contain SKILL spans annotated with registry coordinates.
    ```
 4. Find all traces that used a specific skill version:
    ```python
-   traces = mlflow.search_traces(
+   traces = mlflow.search_skill_traces(
        experiment_ids=[experiment_id],
-       filter_string=(
-           'span.type = "SKILL"'
-           ' AND span.attributes.mlflow.skill.name = "code-review"'
-           ' AND span.attributes.mlflow.skill.version = "1.0.0"'
-       ),
+       skill_name="code-review",
+       skill_version="1.0.0",
    )
    ```
    Evaluation results for these traces can then be retrieved via
    their `trace_id` values.
 
 This two-step approach (query traces by skill attributes, then
-retrieve associated evaluation results) works with the existing
-MLflow tracing and evaluation APIs. Richer integration, such as
-filtering evaluation results directly by skill version, is
-follow-up work (see [Adoption strategy](#adoption-strategy)).
+retrieve associated evaluation results) works with the skill
+trace query API and existing MLflow evaluation APIs. Filtering
+evaluation results directly by skill version (without the
+intermediate trace lookup) remains future work.
 
 #### CI pipeline for automated regression detection
 
@@ -986,6 +983,24 @@ span-level, inline annotation because skills are ambient (active
 during inference) and can nest. Both approaches produce trace
 metadata that the MLflow UI can display together.
 
+#### Trace queries
+
+`mlflow.search_skill_traces()` provides first-class keyword
+arguments for common skill trace lookups:
+
+```python
+traces = mlflow.search_skill_traces(
+    experiment_ids=[experiment_id],
+    skill_name="code-review",
+    skill_version="1.0.0",
+)
+```
+
+The function filters to traces with `SKILL` spans matching the
+given `mlflow.skill.*` attributes. The `filter_string` parameter
+can be combined with the keyword filters for additional
+constraints such as trace status or tags.
+
 ### Package manager integration
 
 Rather than building custom harness adapters for each agent harness,
@@ -1298,8 +1313,10 @@ SkillBundle entities, store, REST API, SDK, CLI, UI,
 `mlflow skills-registry pull`, plugin import, package-manager-backed single-skill
 and bundle installation, the package manager plugin interface, the
 `mlflow-skills.lock` resolution lock, `mlflow.skill_context()` for
-manual trace integration, the install-time trace manifest, and automatic
-SKILL spans in the Claude Code autologger.
+manual trace integration, the install-time trace manifest, automatic
+SKILL spans in the Claude Code autologger, and
+`mlflow.search_skill_traces()` for querying traces by skill
+attributes.
 
 #### Future improvements
 

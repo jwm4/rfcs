@@ -1112,10 +1112,44 @@ def pull(
     for a skill bundle."""
 
 
+def search_skill_traces(
+    *,
+    experiment_ids: list[str] | None = None,
+    skill_name: str | None = None,
+    skill_version: str | None = None,
+    workspace: str | None = None,
+    filter_string: str | None = None,
+    max_results: int = 100,
+    order_by: list[str] | None = None,
+    page_token: str | None = None,
+) -> PagedList[Trace]:
+    """Search for traces containing SKILL spans matching the given
+    skill attributes. The skill_name, skill_version, and workspace
+    parameters provide exact-match filtering on the corresponding
+    mlflow.skill.* span attributes. Additional filters can be
+    combined via filter_string, which follows the standard MLflow
+    filter syntax and is AND-ed with the keyword filters."""
+
+
 # Example usage:
 version = mlflow.genai.register_skill(name="code-review", version="1.0.0", source_type="git", source="...")
 servers = mlflow.genai.search_skills(filter_string="status = 'active'")
+traces = mlflow.genai.search_skill_traces(skill_name="code-review", skill_version="1.0.0")
 ```
+
+`search_skill_traces()` filters to traces containing `SKILL` spans
+with matching `mlflow.skill.name`, `mlflow.skill.version`, and
+`mlflow.skill.workspace` attributes, so callers do not need to know
+the span attribute naming convention. The `filter_string` parameter
+composes with the keyword filters for additional constraints (trace
+status, tags, etc.). Because skill identity is recorded as span attributes (not in a
+separate association table like MCP trace linking), implementing
+exact-match queries requires the store layer to support structured
+matching on span attribute values. The existing
+`span.attributes.*` filter path uses text search against
+serialized JSON content, which does not provide exact-match
+semantics. The implementation will need to enhance span attribute
+querying to support this.
 
 For SDK update methods, `NOT_SET` means "leave unchanged" while `None`
 means "clear this nullable field". This mirrors the store-layer update
