@@ -1033,7 +1033,6 @@ class MlflowSkillLockEntry:
 def introspect_bundle(
     *,
     source: str,
-    plugin_format: str,
     source_type: str | None = None,
     subpath: str | None = None,
 ) -> PluginIntrospectionResult:
@@ -1043,7 +1042,6 @@ def introspect_bundle(
 def import_bundle(
     *,
     source: str,
-    plugin_format: str,
     bundle_name: str | None = None,
     version: str | None = None,
     source_type: str | None = None,
@@ -1051,10 +1049,11 @@ def import_bundle(
 ) -> PluginImportResult:
     """Import a plugin as a monolithic bundle.
 
-    Fetches and inspects the plugin in the client environment, registers
-    discovered skills, preserves the plugin source on the bundle version,
-    and returns warnings for non-skill content that is included in the
-    bundle but does not receive individual registry entries.
+    Discovers skill directories (subdirectories containing a SKILL.md
+    entry point), registers them, preserves the plugin source on the
+    bundle version, and returns warnings for non-skill content that is
+    included in the bundle but does not receive individual registry
+    entries.
     """
 
 
@@ -1451,9 +1450,9 @@ a name or version because those values are only required when importing.
 
 ### Supported input format
 
-This RFC supports the Claude Code plugin layout. The caller passes
-`plugin_format="claude-code"`; automatic format detection and additional
-input formats are follow-up work. The importer:
+Import expects a standard layout: a directory tree where each skill is
+a subdirectory containing a SKILL.md entry point. This layout is used
+by Claude Code and other harnesses. The importer:
 
 1. Fetches the Git, OCI, ZIP, or MLflow artifact source using the same
    source-type-aware logic as `pull`.
@@ -1461,11 +1460,10 @@ input formats are follow-up work. The importer:
 3. Reads `.claude-plugin/plugin.json` when present to obtain supported
    plugin metadata such as name and version. Explicit `bundle_name` and
    `version` arguments take precedence.
-4. Discovers skill directories under `skills/` that contain a SKILL.md
-   entry point. The SKILL.md name is used when present; otherwise the
-   directory name is used.
-5. Detects non-skill plugin content, including subagents, hooks, and MCP
-   configuration, for warning purposes only.
+4. Discovers skill directories that contain a SKILL.md entry point.
+   The SKILL.md name is used when present; otherwise the directory
+   name is used.
+5. Detects non-skill content for warning purposes only.
 
 The resulting bundle name and version must be available after explicit
 arguments and plugin metadata are considered. The version must be a

@@ -118,15 +118,14 @@ mlflow.genai.create_skill_bundle_version(
 mlflow skills-registry bundles import \
     --source https://github.com/acme/plugins.git@v1.0.0 \
     --subpath pr-workflow \
-    --plugin-format claude-code \
     --bundle-name pr-workflow \
     --version 1.0.0
 ```
 
-MLflow discovers and registers the plugin's skills as members of a
-monolithic bundle. It preserves the Git source on the bundle and warns
-about subagents, hooks, and MCP configurations that are not registered
-as individual entities.
+MLflow discovers skill directories (subdirectories containing a
+SKILL.md entry point) and registers them as members of a monolithic
+bundle. It preserves the Git source on the bundle and warns about
+non-skill content that is not registered as individual entities.
 
 ## Install and use
 
@@ -241,18 +240,18 @@ Registry enables. Each shows both CLI and UI paths.
 
 #### Import an existing plugin as a bundle
 
-1. Import a Claude Code plugin from a remotely accessible source:
+1. Import a plugin from a remotely accessible source:
    ```bash
    mlflow skills-registry bundles import \
        --source https://github.com/acme/plugins.git@v1.0.0 \
        --subpath pr-workflow \
-       --plugin-format claude-code \
        --bundle-name pr-workflow \
        --version 1.0.0
    ```
-2. MLflow fetches the plugin to a temporary directory in the client
-   environment, discovers directories containing SKILL.md entry points,
-   and cleans up the temporary copy after registration completes.
+2. MLflow fetches the source to a temporary directory in the client
+   environment, discovers skill directories (subdirectories containing
+   a SKILL.md entry point), and cleans up the temporary copy after
+   registration completes.
 3. MLflow registers each discovered skill as an embedded, source-less
    skill version and records its path as `member_subpath` in a new
    monolithic bundle version. The bundle retains the original plugin
@@ -701,10 +700,12 @@ This aligns with the MCP Server Registry (RFC-0004).
 ### Plugin import
 
 `mlflow skills-registry bundles import` is a client-side convenience operation for
-registering an existing harness-specific plugin as a monolithic bundle.
-This RFC supports the Claude Code plugin layout.
-Additional input formats can be added later without changing the
-registry data model.
+registering an existing plugin as a monolithic bundle. Import expects
+a standard layout: a directory tree where each skill is a
+subdirectory containing a SKILL.md entry point. This layout is used
+by Claude Code and other harnesses. Additional discovery rules for
+other layouts can be added later without changing the registry data
+model.
 
 Before importing, users can call `mlflow skills-registry bundles introspect` or the SDK
 `introspect_bundle()` function to preview the skills and unregistered
