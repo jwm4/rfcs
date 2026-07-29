@@ -28,15 +28,18 @@ receive individual registry entries. This RFC extends bundle membership
 to register non-skill content, making it discoverable, trackable, and
 queryable.
 
-The design is generic rather than type-specific. The `member_type`
-field on bundle membership becomes a free-form string: `skill`,
-`agent`, `hook`, `mcp-server`, `command`, `lsp-server`, `monitor`,
-`theme`, or any value a package manager or harness defines. MLflow
-treats the type as an opaque label. New component types do not require
-schema changes, new entity tables, or new API endpoints. The plugin
-component landscape across agent harnesses is large (15+ component
-types across Claude Code, Cursor, Copilot, and others) and actively
-growing. A type-per-entity approach would not scale.
+The design is generic rather than type-specific. RFC-0008's
+`skill_bundle_version_members` table has no `member_type` column. This
+RFC adds `member_type VARCHAR` with a default of `'skill'`, so existing
+RFC-0008 rows are backfilled automatically with no data loss. The field
+is a free-form string: `skill`, `agent`, `hook`, `mcp-server`,
+`command`, `lsp-server`, `monitor`, `theme`, or any value a package
+manager or harness defines. MLflow treats the type as an opaque label.
+New component types do not require schema changes, new entity tables,
+or new API endpoints. The plugin component landscape across agent
+harnesses is large (15+ component types across Claude Code, Cursor,
+Copilot, and others) and actively growing. A type-per-entity approach
+would not scale.
 
 The bundle remains the governance unit. Non-skill members are governed
 through the bundle's lifecycle: versioning, status transitions,
@@ -135,12 +138,12 @@ plugin containing skills, an agent, and a hook.
 
 1. Register the individual skills (unchanged from RFC-0008):
    ```bash
-   mlflow skills register --name code-review --version 1.0.0 \
+   mlflow skills-registry register --name code-review --version 1.0.0 \
        --source-type git \
        --source https://github.com/acme/plugins.git@v2.0.0 \
        --subpath skills/code-review
 
-   mlflow skills register --name style-check --version 2.0.0 \
+   mlflow skills-registry register --name style-check --version 2.0.0 \
        --source-type git \
        --source https://github.com/acme/plugins.git@v2.0.0 \
        --subpath skills/style-check
@@ -148,7 +151,7 @@ plugin containing skills, an agent, and a hook.
 
 2. Create a bundle version with mixed member types:
    ```bash
-   mlflow skills create-bundle-version \
+   mlflow skills-registry bundles create-version \
        --name pr-workflow --version 2.0.0 \
        --source-type git \
        --source https://github.com/acme/plugins.git@v2.0.0 \
@@ -164,7 +167,7 @@ plugin containing skills, an agent, and a hook.
 
 3. View the bundle composition:
    ```bash
-   mlflow skills get-bundle-version --name pr-workflow --version 2.0.0
+   mlflow skills-registry bundles get-version --name pr-workflow --version 2.0.0
    ```
    Output shows all members grouped by type:
    ```
@@ -191,9 +194,11 @@ plugin containing skills, an agent, and a hook.
 A developer wants to find bundles that include an MCP server
 configuration, to understand which bundles require MCP infrastructure.
 
-1. Search bundles by member type:
+1. Search bundles by member type using the standard `--filter`
+   expression (consistent with `search_runs`, `search_experiments`,
+   and other MLflow search APIs):
    ```bash
-   mlflow skills search-bundle-versions \
+   mlflow skills-registry bundles search-versions \
        --filter "member_type = 'mcp-server'"
    ```
 
@@ -217,7 +222,7 @@ entry rather than embedding configuration directly.
 
 1. Register a bundle that references an MCP server from RFC-0004:
    ```bash
-   mlflow skills create-bundle-version \
+   mlflow skills-registry bundles create-version \
        --name data-pipeline --version 1.0.0 \
        --skill sql-query:1.0.0 \
        --skill data-transform:1.0.0 \
@@ -243,18 +248,26 @@ entry rather than embedding configuration directly.
 
 #### Import a plugin with non-skill content
 
-RFC-0008's `mlflow skills import` discovers skills and warns about
-non-skill content. This RFC registers all discovered members.
+RFC-0008's `mlflow skills-registry bundles import` discovers skills
+using the standard SKILL.md directory layout and warns about non-skill
+content. This RFC adds an optional `--plugin-format` flag that enables
+format-specific discovery rules for non-skill member types. When
+omitted, import uses the RFC-0008 default (SKILL.md layout, skills
+only). When provided, import uses the specified format's discovery
+rules to detect and register all member types.
 
 1. Import a Claude Code plugin:
    ```bash
-   mlflow skills import \
+   mlflow skills-registry bundles import \
        --source https://github.com/acme/plugins.git@v2.0.0 \
        --subpath pr-workflow \
        --plugin-format claude-code \
        --bundle-name pr-workflow \
        --version 2.0.0
    ```
+   The `--plugin-format claude-code` flag tells import to use Claude
+   Code's directory conventions to discover non-skill members alongside
+   skills.
 
 2. With this RFC, output shows all members (no more warnings for
    recognized component types):
@@ -276,15 +289,21 @@ non-skill content. This RFC registers all discovered members.
    recognize, it still registers them with a generic type (e.g.,
    `member_type="other"`) and includes a note in the output.
 
+Format parsers are pluggable, using the same entrypoint mechanism as
+RFC-0008's package manager plugins. This lets third parties add
+discovery rules for new harness formats without changes to MLflow
+itself. The plugin interface details are left to implementation.
+
 #### Register a Cursor plugin with instructions
 
 A team maintains a Cursor plugin that includes skills and `.mdc`
 instruction rules. This journey shows the generic member type working
 with a non-Claude-Code harness.
 
-1. Import the Cursor plugin:
+1. Import the Cursor plugin with `--plugin-format cursor` to use
+   Cursor's `.mdc`-based discovery rules:
    ```bash
-   mlflow skills import \
+   mlflow skills-registry bundles import \
        --source https://github.com/acme/cursor-plugin.git@v1.0.0 \
        --plugin-format cursor \
        --bundle-name cursor-coding-standards \
@@ -306,7 +325,7 @@ with a non-Claude-Code harness.
 
 3. Install for Cursor:
    ```bash
-   mlflow skills install-bundle \
+   mlflow skills-registry bundles install \
        --name cursor-coding-standards --alias production \
        --harness cursor
    ```
@@ -321,7 +340,7 @@ all bundles, regardless of which harness they target.
 
 1. List all distinct member types in use:
    ```bash
-   mlflow skills search-bundle-versions --summarize member_types
+   mlflow skills-registry bundles search-versions --summarize member_types
    ```
    Output:
    ```
@@ -382,6 +401,9 @@ all bundle members, not just skills.
 - **Independent lifecycle for non-skill members.** Non-skill members
   do not have their own versioning, status transitions, aliases, or
   tags independent of the bundle. The bundle is the governance unit.
+  Member-level tags on the membership table are not included; teams
+  that need to label individual members can use bundle-level tags
+  with a naming convention (e.g., `hook:pre-commit-scan:security`).
   If a future need arises for standalone agent or hook entities with
   full lifecycle, that would be a separate proposal.
 
@@ -398,13 +420,6 @@ all bundle members, not just skills.
 
 # Open questions
 
-- Should non-skill members support their own tags on the membership
-  table, or are bundle-level tags sufficient?
-- How should `mlflow skills search` expose member type filtering?
-  A `--member-type` flag, a filter expression field, or both?
-- Should the import command's format parsers be pluggable (like
-  package manager plugins), or is a fixed set of supported formats
-  sufficient for this RFC?
 - Should cross-registry MCP server references be validated at bundle
   creation time (fail if the referenced MCP server version doesn't
   exist) or deferred to pull/install time?
