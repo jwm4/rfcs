@@ -553,10 +553,13 @@ shared artifact (used with Git, OCI, and ZIP). The optional
 Each version tracks an `install_count` that the server increments on
 each `install` call, enabling popularity-based discovery.
 
-`register_skill()` creates the parent Skill when needed and otherwise
-reuses the existing parent. If the target `(name, version)` already
-exists, registration fails with an error. This matches the MCP Server
-Registry behavior (`register_mcp_server()` in mlflow/mlflow#23696).
+`register_skill()` creates the parent Skill when needed (with null
+`display_name` and `description`) and otherwise reuses the existing
+parent. To set parent-level metadata, use `create_skill()` before
+registering versions or `update_skill()` afterward. If the target
+`(name, version)` already exists, registration fails with an error.
+This matches the MCP Server Registry behavior
+(`register_mcp_server()` in mlflow/mlflow#23696).
 
 #### SkillBundle
 

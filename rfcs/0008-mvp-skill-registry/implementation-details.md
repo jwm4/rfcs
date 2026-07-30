@@ -18,7 +18,7 @@ workspace-scoped.
 |--------|------|-------|
 | `workspace` | `String(63)` | PK, default `'default'` |
 | `name` | `String(256)` | PK |
-| `display_name` | `String(256)` | mutable human-readable label |
+| `display_name` | `String(256)` | mutable human-readable label; UI falls back to `name` when null |
 | `description` | `String(5000)` | |
 | `created_by` | `String(256)` | |
 | `last_updated_by` | `String(256)` | |
@@ -102,7 +102,7 @@ because the major/minor/patch prefix provides sufficient pruning.
 |--------|------|-------|
 | `workspace` | `String(63)` | PK, default `'default'` |
 | `name` | `String(256)` | PK |
-| `display_name` | `String(256)` | mutable human-readable label |
+| `display_name` | `String(256)` | mutable human-readable label; UI falls back to `name` when null |
 | `description` | `String(5000)` | |
 | `created_by` | `String(256)` | |
 | `last_updated_by` | `String(256)` | |
@@ -238,7 +238,7 @@ class Skill:
 | Field | Type | Description |
 |---|---|---|
 | `name` | `str` | Stable logical asset name, unique within a workspace |
-| `display_name` | `str` | Mutable human-readable label for UI display |
+| `display_name` | `str` | Mutable human-readable label for UI display. When null, the UI falls back to `name` |
 | `status` | `SkillStatus` | Read-only; derived from the parent-resolved version: highest active semantic version if present, otherwise highest non-deleted non-active semantic version |
 | `aliases` | `dict[str, str]` | Stable version pointers (e.g., `{"production": "1.2.0"}`); read-only, populated from `skill_aliases` table |
 | `latest_version` | `str` | Read-only; highest semantic version among `active` versions if one exists, otherwise highest non-`deleted` non-`active` version |
@@ -267,6 +267,7 @@ class SkillVersion:
     tags: dict[str, str] = field(default_factory=dict)
     aliases: list[str] = field(default_factory=list)
     workspace: str | None = None
+    install_count: int = 0
     created_by: str | None = None
     last_updated_by: str | None = None
     creation_timestamp: int | None = None
@@ -276,7 +277,7 @@ class SkillVersion:
 | Field | Type | Description |
 |---|---|---|
 | `version` | `str` | Publisher-supplied version string. Semantic versioning is required (e.g., `1.0.0`, `2.1.0-beta.1`) |
-| `display_name` | `str` | Mutable human-readable label for UI display |
+| `display_name` | `str` | Mutable human-readable label for UI display. When null, the UI falls back to `name` |
 | `source_type` | `SkillSourceType` | Optional distribution mechanism: `git`, `oci`, `zip`, `mlflow` |
 | `source` | `str` | Pointer to the content in the source system. Required for standalone pull. May be omitted only when the version's content lives within a bundle-level artifact, in which case the containing bundle membership identifies the embedded content path |
 | `subpath` | `str` | Optional path within the artifact where this skill's content lives. See subpath usage table below |
@@ -450,6 +451,7 @@ class SkillBundleVersion:
     skills: list[SkillMemberRef] = field(default_factory=list)
     aliases: list[str] = field(default_factory=list)
     workspace: str | None = None
+    install_count: int = 0
     created_by: str | None = None
     last_updated_by: str | None = None
     creation_timestamp: int | None = None
@@ -782,8 +784,6 @@ def register_skill(
     *,
     name: str,
     version: str,
-    display_name: str | None = None,
-    description: str | None = None,
     source_type: str | None = None,
     source: str | None = None,
     subpath: str | None = None,
@@ -791,13 +791,16 @@ def register_skill(
     content_digest: str | None = None,
 ) -> SkillVersion:
     """Register a skill version. Auto-creates the parent Skill if
-    it does not exist and otherwise reuses the existing parent. If the
-    version already exists, an MlflowException is raised. This matches
-    the MCP Server Registry behavior (register_mcp_server). If
-    content_path is provided, the client uploads the files through
-    existing MLflow artifact APIs and sets source_type, source, and
-    content_digest. content_path is mutually exclusive with source_type,
-    source, subpath, and content_digest."""
+    it does not exist (with null display_name and description) and
+    otherwise reuses the existing parent. To set parent-level
+    metadata, use create_skill() before registering versions or
+    update_skill() afterward. If the version already exists, an
+    MlflowException is raised. This matches the MCP Server Registry
+    behavior (register_mcp_server). If content_path is provided, the
+    client uploads the files through existing MLflow artifact APIs
+    and sets source_type, source, and content_digest. content_path
+    is mutually exclusive with source_type, source, subpath, and
+    content_digest."""
 
 
 def create_skill(
@@ -1328,6 +1331,7 @@ class SkillVersionResponse(BaseModel):
     status: str = "draft"
     aliases: list[str] = Field(default_factory=list)
     tags: dict[str, str] = Field(default_factory=dict)
+    install_count: int = 0
     created_by: str | None = None
     last_updated_by: str | None = None
     creation_timestamp: int | None = None
@@ -1360,6 +1364,7 @@ class SkillBundleVersionResponse(BaseModel):
     skills: list[SkillMemberRefPayload] = Field(default_factory=list)
     aliases: list[str] = Field(default_factory=list)
     tags: dict[str, str] = Field(default_factory=dict)
+    install_count: int = 0
     created_by: str | None = None
     last_updated_by: str | None = None
     creation_timestamp: int | None = None
@@ -1664,8 +1669,8 @@ When `mlflow skills-registry install` is invoked:
    latest resolution to obtain the registered source pointer. `version`
    and `alias` are mutually exclusive; omitting both selects the
    system-defined latest version.
-2. **Pull:** MLflow pulls the skill content to a local temporary
-   directory using the same source-type-aware logic as `pull`.
+2. **Pull:** MLflow pulls the skill content to `.mlflow-skills/` at the
+   project root using the same source-type-aware logic as `pull`.
 3. **Delegate:** MLflow passes the skill name and local path to the
    configured package manager plugin via `install_skill()`. The plugin
    owns harness-specific behavior, scope handling, directory placement,
