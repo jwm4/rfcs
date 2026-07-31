@@ -783,7 +783,7 @@ import mlflow
 
 def register_skill(
     *,
-    name: str,
+    name: str | None = None,
     version: str,
     display_name: str | None = None,
     source_type: str | None = None,
@@ -799,11 +799,18 @@ def register_skill(
     metadata, use create_skill() before registering versions or
     update_skill() afterward. If the version already exists, an
     MlflowException is raised. This matches the MCP Server Registry
-    behavior (register_mcp_server). If content_path is provided, the
-    client uploads the files through existing MLflow artifact APIs
-    and sets source_type, source, and content_digest. content_path
-    is mutually exclusive with source_type, source, subpath, and
-    content_digest."""
+    behavior (register_mcp_server). If name is omitted and source
+    is provided, the server fetches the source and extracts the
+    name from the skill's SKILL.md entry point. If name is omitted
+    and content_path is provided, the client extracts the name from
+    the local SKILL.md before uploading. If source_type is omitted
+    but source is provided, the server infers the type from the URL
+    (.git suffix or git:// = git, oci:// = oci, .zip = zip); if
+    inference fails, an error asks the caller to specify source_type
+    explicitly. If content_path is provided, the client uploads the
+    files through existing MLflow artifact APIs and sets source_type,
+    source, and content_digest. content_path is mutually exclusive
+    with source_type, source, subpath, and content_digest."""
 
 
 def create_skill(
@@ -1071,14 +1078,16 @@ def import_bundle(
     entry point), registers them, preserves the plugin source on the
     bundle version, and returns warnings for non-skill content that is
     included in the bundle but does not receive individual registry
-    entries.
+    entries. If bundle_name is omitted, it is inferred from the source
+    directory name. If source_type is omitted, it is inferred from the
+    URL scheme.
     """
 
 
 def install_skill(
     *,
     name: str,
-    harness: str,
+    harness: str | None = None,
     version: str | None = None,
     alias: str | None = None,
     package_manager: str | None = None,
@@ -1087,17 +1096,18 @@ def install_skill(
     local_path: str | None = None,
 ) -> PackageManagerInstallResult:
     """Resolve a skill and install it through a package manager plugin.
-    The harness argument is required to keep behavior predictable
-    across plugins. If lock_file is provided, record the exact resolved
-    version and installation inputs for replay. If local_path is
-    provided, skip fetching from source and pass the local path
-    directly to the package manager."""
+    If harness is omitted, the client detects the local harness from
+    the environment (e.g., presence of .claude/ suggests Claude Code).
+    If lock_file is provided, record the exact resolved version and
+    installation inputs for replay. If local_path is provided, skip
+    fetching from source and pass the local path directly to the
+    package manager."""
 
 
 def install_bundle(
     *,
     name: str,
-    harness: str,
+    harness: str | None = None,
     version: str | None = None,
     alias: str | None = None,
     package_manager: str | None = None,
@@ -1107,8 +1117,8 @@ def install_bundle(
 ) -> PackageManagerInstallResult:
     """Resolve a bundle and install it through a package manager plugin.
     For monolithic bundles, non-skill content is included in the
-    installed artifact. The harness argument is required to keep
-    behavior predictable across plugins. If lock_file is provided,
+    installed artifact. If harness is omitted, the client detects the
+    local harness from the environment. If lock_file is provided,
     record the exact resolved version and installation inputs for
     replay. If local_path is provided, skip fetching from source
     and pass the local path directly to the package manager."""
@@ -1196,6 +1206,17 @@ resource paths. It is exposed under both `/api/3.0/mlflow/skills` and
 `/ajax-api/3.0/mlflow/skills`, plus the corresponding static-prefix
 variants, following the MCP Server Registry (RFC-0004) pattern.
 
+**Field inference.** The server infers optional fields from source
+content when possible, so the simplest call requires only what cannot
+be derived. When `name` is omitted from a registration request, the
+server fetches the source and extracts the name from the skill's
+SKILL.md entry point. When `source_type` is omitted but `source` is
+provided, the server infers the type from the URL scheme. This keeps
+SDKs as thin REST wrappers, avoids reimplementing inference in every
+language, and prepares for future server-side content inspection
+(e.g., signature verification). Client-side inference is limited to
+local environment detection (e.g., inferring the installed harness).
+
 There is no skill-registry content-upload endpoint. The client-side
 `register_skill(content_path=...)` helper uploads through existing
 MLflow artifact APIs, then uses the version-creation endpoint below to
@@ -1209,10 +1230,11 @@ All paths relative to the logical skills router prefix.
 |---|---|---|
 | `POST` | `/` | Create a skill |
 | `GET` | `/` | Search skills |
+| `POST` | `/register` | Register a skill version (name optional; server infers from source when omitted, auto-creates parent) |
 | `GET` | `/{name}` | Get skill by name |
 | `PATCH` | `/{name}` | Update skill fields |
 | `DELETE` | `/{name}` | Hard-delete skill (cascades, subject to references) |
-| `POST` | `/{name}/versions` | Create a skill version |
+| `POST` | `/{name}/versions` | Create a skill version (name from path, no inference) |
 | `GET` | `/{name}/versions` | Search versions |
 | `GET` | `/{name}/versions/{version}` | Get a specific version |
 | `PATCH` | `/{name}/versions/{version}` | Update version |
@@ -1270,7 +1292,10 @@ find bundles that include a given skill (reverse membership lookup)
 ### Request and response models
 
 Request models contain only the mutable fields; resource identifiers
-come from path parameters:
+come from path parameters, with one exception: `POST /register`
+accepts `name` in the request body (optional, inferred from source
+content when omitted) rather than the path. This parallels RFC-0004's
+top-level `register_mcp_server()` pattern:
 
 ```python
 from pydantic import BaseModel, Field
@@ -1288,6 +1313,7 @@ class UpdateSkillRequest(BaseModel):
 
 
 class CreateSkillVersionRequest(BaseModel):
+    name: str | None = None  # optional for POST /register (inferred from source when omitted); ignored for POST /{name}/versions (name from path)
     version: str
     display_name: str | None = None
     source_type: str | None = None

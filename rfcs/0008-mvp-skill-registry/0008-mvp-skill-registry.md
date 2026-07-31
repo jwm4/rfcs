@@ -59,6 +59,15 @@ The two entity types are:
 - **Skill bundles**: versioned collections that group related skills
   into a single governed, installable unit
 
+**Minimize required inputs.** The CLI and API infer optional fields
+from source content or local environment when possible, so the
+simplest invocation requires only what cannot be derived. For example,
+`source_type` is inferred from the source URL, and `name` can be
+extracted from the skill's SKILL.md entry point. Inference from
+registry content happens server-side to keep SDKs thin and portable
+across languages. Inference from the local environment (e.g.,
+detecting the installed harness) happens client-side.
+
 `mlflow skills pull` provides a harness-agnostic way to fetch
 registered content from its source. Harness-specific installation
 delegates to package managers (APM, Lola, or others via a plugin
@@ -87,6 +96,14 @@ MCP server references).
 ```python
 import mlflow
 
+# Minimal: name inferred from SKILL.md content, source_type from URL
+mlflow.genai.register_skill(
+    version="1.0.0",
+    source="https://github.com/acme/agent-skills.git@v1.0.0",
+    subpath="code-review",
+)
+
+# Explicit: all fields specified
 mlflow.genai.register_skill(
     name="code-review",
     version="1.0.0",
@@ -192,6 +209,11 @@ Registry enables. Each shows both CLI and UI paths.
 
 1. Register individual skill versions pointing to their sources:
    ```bash
+   # Minimal: name and source type inferred
+   mlflow skills register --version 1.0.0 \
+       --source https://github.com/acme/agent-skills.git@v1.0.0 \
+       --subpath code-review
+   # Explicit: all fields specified
    mlflow skills register --name code-review --version 1.0.0 \
        --source https://github.com/acme/agent-skills.git@v1.0.0 \
        --subpath code-review
@@ -212,7 +234,8 @@ Registry enables. Each shows both CLI and UI paths.
    )
    ```
    **UI path:** Navigate to the Skills page, click "Register Skill,"
-   fill in name, version, source type, and source URL, then submit.
+   fill in the source URL and version (name and source type are
+   inferred when omitted), then submit.
 2. Create a skill bundle version that pins these members:
    ```bash
    mlflow skills bundles create-version --name pr-workflow --version 1.0.0 \
@@ -1054,9 +1077,9 @@ MLflow owns registry and source resolution plus the trace manifest. The
 package manager owns all harness-specific behavior, including directory
 placement and any package-manager or harness manifest generation. Both
 installation commands increment the server-side install count for the
-installed skill or bundle version, and both require a `--harness`
-argument, which
-MLflow passes to the plugin. Both also accept an optional `--local-path`
+installed skill or bundle version, and both accept a `--harness`
+argument (auto-detected from the local environment when omitted).
+Both also accept an optional `--local-path`
 argument pointing to previously pulled content, which skips the fetch
 from source and passes the local path directly to the package manager.
 Users who only want to download content without installing it into a
@@ -1076,13 +1099,12 @@ type. The tradeoff is that package managers with their own remote source
 capabilities (e.g., Git-aware caching or shallow clones) cannot apply
 those optimizations when MLflow has already fetched the content.
 
-**Harness selection.** The `--harness` argument is required on both
-installation commands. While some package managers can auto-detect the
-target harness (APM detects harness signals in the project; Lola installs
-to all detected assistants by default), detection behavior varies across
-plugins and can produce surprising results. A required argument keeps
-the MLflow interface predictable regardless of which plugin is
-configured.
+**Harness selection.** When `--harness` is provided, installation
+targets that specific harness. When omitted, the client detects the
+local harness from the environment (e.g., presence of `.claude/`
+suggests Claude Code). If detection finds exactly one harness, it is
+used automatically; if multiple or none are detected, MLflow raises
+an error asking the user to specify `--harness` explicitly.
 
 **Reproducible installation.** MLflow defines a small resolution lock,
 `mlflow-skills.lock`, that records the tracking server URL and the exact
