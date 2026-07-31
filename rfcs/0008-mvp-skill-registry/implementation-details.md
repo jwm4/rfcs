@@ -31,11 +31,7 @@ workspace-scoped.
 |--------|------|-------|
 | `workspace` | `String(63)` | PK, FK |
 | `name` | `String(256)` | PK, FK |
-| `version` | `String(256)` | PK, valid semantic version |
-| `version_major` | `Integer` | extracted from validated semantic version |
-| `version_minor` | `Integer` | extracted from validated semantic version |
-| `version_patch` | `Integer` | extracted from validated semantic version |
-| `version_prerelease_sort_key` | `String(512)` | lexicographically sortable encoding of prerelease identifiers |
+| `version` | `Integer` | PK, server-assigned monotonic integer |
 | `display_name` | `String(256)` | mutable human-readable label |
 | `source_type` | `String(20)` | nullable; `git`, `oci`, `zip`, `mlflow` |
 | `source` | `String(2048)` | nullable pointer to skill content |
@@ -53,20 +49,12 @@ supports administrative hard deletion of the parent `Skill`; normal
 version deletion is a status transition to `deleted` and does not
 physically remove the version row.
 
-**Semantic version ordering**: `version_major`, `version_minor`,
-`version_patch`, and `version_prerelease_sort_key` are materialized
-from the validated semantic version string at write time. The
-prerelease sort key is a lexicographically sortable encoding of the
-prerelease identifiers, following the approach in the MCP Server
-Registry implementation (mlflow/mlflow#23952). Release versions
-encode to a sentinel that sorts above all prerelease encodings, so
-full semver precedence is resolved in SQL without application-level
-tie-breaking. Build metadata is ignored for precedence.
+**Version ordering**: versions are monotonic integers assigned by
+the server. Each new version for a given `(workspace, name)` receives
+the next integer. Ordering is a simple integer comparison.
 
 **Index**: `ix_skill_versions_latest_lookup` on `(workspace, name,
-status, version_major, version_minor, version_patch)` supports
-latest-resolution lookups. The prerelease sort key is not indexed
-because the major/minor/patch prefix provides sufficient pruning.
+status, version)` supports latest-resolution lookups.
 
 ### `skill_tags`
 
@@ -83,7 +71,7 @@ because the major/minor/patch prefix provides sufficient pruning.
 |--------|------|-------|
 | `workspace` | `String(63)` | PK, FK |
 | `name` | `String(256)` | PK, FK |
-| `version` | `String(256)` | PK, FK |
+| `version` | `Integer` | PK, FK |
 | `key` | `String(256)` | PK |
 | `value` | `Text` | |
 
@@ -94,7 +82,7 @@ because the major/minor/patch prefix provides sufficient pruning.
 | `workspace` | `String(63)` | PK, FK |
 | `name` | `String(256)` | PK, FK |
 | `alias` | `String(256)` | PK |
-| `version` | `String(256)` | target version string |
+| `version` | `Integer` | target version |
 
 ### `skill_bundles`
 
@@ -115,11 +103,7 @@ because the major/minor/patch prefix provides sufficient pruning.
 |--------|------|-------|
 | `workspace` | `String(63)` | PK, FK |
 | `name` | `String(256)` | PK, FK |
-| `version` | `String(256)` | PK, valid semantic version |
-| `version_major` | `Integer` | extracted from validated semantic version |
-| `version_minor` | `Integer` | extracted from validated semantic version |
-| `version_patch` | `Integer` | extracted from validated semantic version |
-| `version_prerelease_sort_key` | `String(512)` | lexicographically sortable encoding of prerelease identifiers |
+| `version` | `Integer` | PK, server-assigned monotonic integer |
 | `display_name` | `String(256)` | mutable human-readable label |
 | `source_type` | `String(20)` | optional; `git`, `oci`, `zip`, `mlflow` |
 | `source` | `String(2048)` | optional pointer to bundle artifact |
@@ -133,7 +117,7 @@ because the major/minor/patch prefix provides sufficient pruning.
 | `last_updated_timestamp` | `BigInteger` | millis since epoch |
 
 FK: `(workspace, name)` references `skill_bundles`, CASCADE delete.
-Semantic version ordering and index follow the same pattern as
+Version ordering and index follow the same pattern as
 `skill_versions`.
 
 ### `skill_bundle_version_members`
@@ -142,9 +126,9 @@ Semantic version ordering and index follow the same pattern as
 |--------|------|-------|
 | `workspace` | `String(63)` | PK |
 | `bundle_name` | `String(256)` | PK, FK to `skill_bundle_versions` |
-| `bundle_version` | `String(256)` | PK, FK to `skill_bundle_versions` |
+| `bundle_version` | `Integer` | PK, FK to `skill_bundle_versions` |
 | `member_name` | `String(256)` | PK |
-| `member_version` | `String(256)` | PK |
+| `member_version` | `Integer` | PK |
 | `member_subpath` | `String(2048)` | nullable; parsed from `#subpath` fragment of member URI |
 
 FK: `(workspace, bundle_name, bundle_version)` references
@@ -166,7 +150,7 @@ enforces referential integrity with RESTRICT delete.
 |--------|------|-------|
 | `workspace` | `String(63)` | PK, FK |
 | `name` | `String(256)` | PK, FK |
-| `version` | `String(256)` | PK, FK |
+| `version` | `Integer` | PK, FK |
 | `key` | `String(256)` | PK |
 | `value` | `Text` | |
 
@@ -177,7 +161,7 @@ enforces referential integrity with RESTRICT delete.
 | `workspace` | `String(63)` | PK, FK |
 | `name` | `String(256)` | PK, FK |
 | `alias` | `String(256)` | PK |
-| `version` | `String(256)` | target bundle version string |
+| `version` | `Integer` | target bundle version |
 
 **Workspace handling.** All tables use `(workspace, ...)` as the leading
 primary key components. Single-tenant deployments use `'default'`.
@@ -227,8 +211,8 @@ class Skill:
     workspace: str | None = None
     status: SkillStatus | None = None  # read-only, derived from parent-resolved version
     tags: dict[str, str] = field(default_factory=dict)
-    aliases: dict[str, str] = field(default_factory=dict)  # read-only; populated from skill_aliases table, e.g. {"production": "1.2.0"}
-    latest_version: str | None = None  # read-only, shared latest-resolution rule
+    aliases: dict[str, int] = field(default_factory=dict)  # read-only; populated from skill_aliases table, e.g. {"production": 2}
+    latest_version: int | None = None  # read-only, shared latest-resolution rule
     created_by: str | None = None
     last_updated_by: str | None = None
     creation_timestamp: int | None = None
@@ -239,9 +223,9 @@ class Skill:
 |---|---|---|
 | `name` | `str` | Stable logical asset name, unique within a workspace |
 | `display_name` | `str` | Mutable human-readable label for UI display. When null, the UI falls back to `name` |
-| `status` | `SkillStatus` | Read-only; derived from the parent-resolved version: highest active semantic version if present, otherwise highest non-deleted non-active semantic version |
-| `aliases` | `dict[str, str]` | Stable version pointers (e.g., `{"production": "1.2.0"}`); read-only, populated from `skill_aliases` table |
-| `latest_version` | `str` | Read-only; highest semantic version among `active` versions if one exists, otherwise highest non-`deleted` non-`active` version |
+| `status` | `SkillStatus` | Read-only; derived from the parent-resolved version: highest active version number if present, otherwise highest non-deleted non-active version number |
+| `aliases` | `dict[str, int]` | Stable version pointers (e.g., `{"production": 2}`); read-only, populated from `skill_aliases` table |
+| `latest_version` | `int` | Read-only; highest version number among `active` versions if one exists, otherwise highest non-`deleted` non-`active` version |
 | `workspace` | `str` | Visibility boundary |
 
 ### SkillVersion entity
@@ -257,7 +241,7 @@ class SkillSourceType(StrEnum):
 @dataclass
 class SkillVersion:
     name: str
-    version: str
+    version: int
     display_name: str | None = None
     source_type: SkillSourceType | None = None
     source: str | None = None
@@ -276,7 +260,7 @@ class SkillVersion:
 
 | Field | Type | Description |
 |---|---|---|
-| `version` | `str` | Publisher-supplied version string. Semantic versioning is required (e.g., `1.0.0`, `2.1.0-beta.1`) |
+| `version` | `int` | Server-assigned monotonic integer. Each new version receives the next integer |
 | `display_name` | `str` | Mutable human-readable label for UI display. When null, the UI falls back to `name` |
 | `source_type` | `SkillSourceType` | Optional distribution mechanism: `git`, `oci`, `zip`, `mlflow` |
 | `source` | `str` | Pointer to the content in the source system. Required for standalone pull. May be omitted only when the version's content lives within a bundle-level artifact, in which case the containing bundle membership identifies the embedded content path |
@@ -331,7 +315,7 @@ example, a skill with a SKILL.md, scripts, and reference material is
 stored as separate artifacts under a version-specific prefix:
 
 ```
-skills/code-review/1.0.0/
+skills/code-review/1/
   SKILL.md
   scripts/analyze.sh
   scripts/lint-config.json
@@ -340,7 +324,7 @@ skills/code-review/1.0.0/
 
 The `source` field contains the artifact URI resolved by MLflow's
 artifact storage (for example,
-`mlflow-artifacts:/skills/code-review/1.0.0/sha256-abc123/` when using
+`mlflow-artifacts:/skills/code-review/1/sha256-abc123/` when using
 the artifact proxy, or a direct artifact-store URI otherwise).
 `source_type="mlflow"` means "stored in MLflow-managed artifact
 storage," not a specific URI scheme. Pull downloads the directory tree
@@ -357,9 +341,8 @@ than a new skill-registry upload endpoint:
    of the directory. Regular files are ordered by normalized relative
    path; both paths and file contents participate in the digest.
    Symlinks are rejected, and empty directories are not preserved.
-3. The client checks the target `(name, version)`. If the version
-   already exists, registration fails with an error. This matches
-   the MCP Server Registry behavior (`register_mcp_server()`).
+3. The client checks that the target skill name can accept a new
+   version.
 4. The client uploads each file through MLflow's existing artifact APIs
    to a digest-qualified, version-specific artifact prefix.
 5. After upload succeeds, the client creates the `SkillVersion` with
@@ -411,8 +394,8 @@ class SkillBundle:
     workspace: str | None = None
     status: SkillStatus | None = None  # read-only, derived from parent-resolved version
     tags: dict[str, str] = field(default_factory=dict)
-    aliases: dict[str, str] = field(default_factory=dict)  # read-only; populated from skill_bundle_aliases table
-    latest_version: str | None = None  # read-only, shared latest-resolution rule
+    aliases: dict[str, int] = field(default_factory=dict)  # read-only; populated from skill_bundle_aliases table
+    latest_version: int | None = None  # read-only, shared latest-resolution rule
     created_by: str | None = None
     last_updated_by: str | None = None
     creation_timestamp: int | None = None
@@ -420,8 +403,8 @@ class SkillBundle:
 ```
 
 `SkillBundle.status` is read-only and uses the same parent-resolved
-version rule as `Skill`: highest active semantic version if present,
-otherwise highest non-deleted non-active semantic version. Latest
+version rule as `Skill`: highest active version number if present,
+otherwise highest non-deleted non-active version number. Latest
 version resolution follows the same fallback.
 
 ### SkillBundleVersion entity
@@ -442,7 +425,7 @@ convention:
 @dataclass
 class SkillBundleVersion:
     name: str
-    version: str
+    version: int
     display_name: str | None = None
     source_type: SkillSourceType | None = None
     source: str | None = None
@@ -475,7 +458,7 @@ assembled, never both:
   omit their own `source` because the bundle artifact is the
   authoritative source. Every source-less member must include a
   `#subpath` fragment in its URI identifying where it lives inside
-  the bundle artifact (e.g., `skills:/name/1.0.0#skills/name`).
+  the bundle artifact (e.g., `skills:/name/1#skills/name`).
 - **Assembled:** has individual member references. Each skill member
   has its own source. `pull` fetches members individually. If a skill
   member has no source, `pull` fails rather than producing a partial
@@ -510,9 +493,9 @@ parameters for primary resource identification.
 | Pattern | Meaning | Example |
 |---------|---------|---------|
 | `skills:/name` | Identify a skill (name only) | `skills:/code-review` |
-| `skills:/name/version` | Pin a specific version | `skills:/code-review/1.0.0` |
+| `skills:/name/version` | Pin a specific version | `skills:/code-review/1` |
 | `skills:/name@alias` | Resolve through an alias | `skills:/code-review@production` |
-| `skills:/name/version#subpath` | Embedded skill inside a monolithic bundle | `skills:/review/1.0.0#skills/review` |
+| `skills:/name/version#subpath` | Embedded skill inside a monolithic bundle | `skills:/review/1#skills/review` |
 
 In the CLI, every command that targets a skill or bundle accepts a
 `--skill-uri` flag (parallel to `--model-uri` in `mlflow models`).
@@ -581,7 +564,6 @@ class SkillRegistryMixin:
     def create_skill_version(
         self,
         name: str,
-        version: str,
         display_name: str | None = None,
         source_type: str | None = None,
         source: str | None = None,
@@ -592,7 +574,7 @@ class SkillRegistryMixin:
         raise NotImplementedError(self.__class__.__name__)
 
     def get_skill_version(
-        self, name: str, version: str,
+        self, name: str, version: int,
     ) -> SkillVersion:
         raise NotImplementedError(self.__class__.__name__)
 
@@ -617,14 +599,14 @@ class SkillRegistryMixin:
     def update_skill_version(
         self,
         name: str,
-        version: str,
+        version: int,
         display_name: str | None = NOT_SET,
         status: SkillStatus | None = NOT_SET,
     ) -> SkillVersion:
         raise NotImplementedError(self.__class__.__name__)
 
     def delete_skill_version(
-        self, name: str, version: str,
+        self, name: str, version: int,
     ) -> None:
         raise NotImplementedError(self.__class__.__name__)
 
@@ -639,20 +621,20 @@ class SkillRegistryMixin:
         raise NotImplementedError(self.__class__.__name__)
 
     def set_skill_version_tag(
-        self, name: str, version: str,
+        self, name: str, version: int,
         key: str, value: str,
     ) -> None:
         raise NotImplementedError(self.__class__.__name__)
 
     def delete_skill_version_tag(
-        self, name: str, version: str, key: str,
+        self, name: str, version: int, key: str,
     ) -> None:
         raise NotImplementedError(self.__class__.__name__)
 
     # --- Skill alias operations ---
 
     def set_skill_alias(
-        self, name: str, alias: str, version: str,
+        self, name: str, alias: str, version: int,
     ) -> None:
         raise NotImplementedError(self.__class__.__name__)
 
@@ -698,7 +680,6 @@ class SkillRegistryMixin:
     def create_skill_bundle_version(
         self,
         name: str,
-        version: str,
         display_name: str | None = None,
         skills: list[str] | None = None,
         source_type: str | None = None,
@@ -709,7 +690,7 @@ class SkillRegistryMixin:
         raise NotImplementedError(self.__class__.__name__)
 
     def get_skill_bundle_version(
-        self, name: str, version: str,
+        self, name: str, version: int,
     ) -> SkillBundleVersion:
         raise NotImplementedError(self.__class__.__name__)
 
@@ -736,14 +717,14 @@ class SkillRegistryMixin:
     def update_skill_bundle_version(
         self,
         name: str,
-        version: str,
+        version: int,
         display_name: str | None = NOT_SET,
         status: SkillStatus | None = NOT_SET,
     ) -> SkillBundleVersion:
         raise NotImplementedError(self.__class__.__name__)
 
     def delete_skill_bundle_version(
-        self, name: str, version: str,
+        self, name: str, version: int,
     ) -> None:
         raise NotImplementedError(self.__class__.__name__)
 
@@ -760,20 +741,20 @@ class SkillRegistryMixin:
         raise NotImplementedError(self.__class__.__name__)
 
     def set_skill_bundle_version_tag(
-        self, name: str, version: str,
+        self, name: str, version: int,
         key: str, value: str,
     ) -> None:
         raise NotImplementedError(self.__class__.__name__)
 
     def delete_skill_bundle_version_tag(
-        self, name: str, version: str, key: str,
+        self, name: str, version: int, key: str,
     ) -> None:
         raise NotImplementedError(self.__class__.__name__)
 
     # --- SkillBundle alias operations ---
 
     def set_skill_bundle_alias(
-        self, name: str, alias: str, version: str,
+        self, name: str, alias: str, version: int,
     ) -> None:
         raise NotImplementedError(self.__class__.__name__)
 
@@ -808,7 +789,6 @@ import mlflow
 def register_skill(
     *,
     name: str | None = None,
-    version: str,
     display_name: str | None = None,
     source_type: str | None = None,
     source: str | None = None,
@@ -817,12 +797,12 @@ def register_skill(
     content_path: str | None = None,
     content_digest: str | None = None,
 ) -> SkillVersion:
-    """Register a skill version. Auto-creates the parent Skill if
+    """Register a skill version. The server assigns the next
+    monotonic integer version. Auto-creates the parent Skill if
     it does not exist (with null display_name and description) and
     otherwise reuses the existing parent. To set parent-level
     metadata, use create_skill() before registering versions or
-    update_skill() afterward. If the version already exists, an
-    MlflowException is raised. This matches the MCP Server Registry
+    update_skill() afterward. This matches the MCP Server Registry
     behavior (register_mcp_server). If name is omitted and source
     is provided, the server fetches the source and extracts the
     name from the skill's SKILL.md entry point. If name is omitted
@@ -871,7 +851,6 @@ def delete_skill(*, name: str) -> None: ...
 def create_skill_version(
     *,
     name: str,
-    version: str,
     display_name: str | None = None,
     source_type: str | None = None,
     source: str | None = None,
@@ -880,7 +859,7 @@ def create_skill_version(
 ) -> SkillVersion: ...
 
 
-def get_skill_version(*, name: str, version: str) -> SkillVersion: ...
+def get_skill_version(*, name: str, version: int) -> SkillVersion: ...
 
 
 def get_skill_version_by_alias(*, name: str, alias: str) -> SkillVersion: ...
@@ -902,13 +881,13 @@ def search_skill_versions(
 def update_skill_version(
     *,
     name: str,
-    version: str,
+    version: int,
     display_name: str | None = NOT_SET,
     status: str | None = NOT_SET,
 ) -> SkillVersion: ...
 
 
-def delete_skill_version(*, name: str, version: str) -> None: ...
+def delete_skill_version(*, name: str, version: int) -> None: ...
 
 
 def create_skill_bundle(
@@ -922,7 +901,6 @@ def create_skill_bundle(
 def create_skill_bundle_version(
     *,
     name: str,
-    version: str,
     display_name: str | None = None,
     skills: list[str] | None = None,
     source_type: str | None = None,
@@ -956,7 +934,7 @@ def delete_skill_bundle(*, name: str) -> None: ...
 
 
 def get_skill_bundle_version(
-    *, name: str, version: str,
+    *, name: str, version: int,
 ) -> SkillBundleVersion: ...
 
 
@@ -981,24 +959,24 @@ def search_skill_bundle_versions(
 def update_skill_bundle_version(
     *,
     name: str,
-    version: str,
+    version: int,
     display_name: str | None = NOT_SET,
     status: str | None = NOT_SET,
 ) -> SkillBundleVersion: ...
 
 
-def delete_skill_bundle_version(*, name: str, version: str) -> None: ...
+def delete_skill_bundle_version(*, name: str, version: int) -> None: ...
 
 
 def set_skill_tag(*, name: str, key: str, value: str) -> None: ...
 
 def delete_skill_tag(*, name: str, key: str) -> None: ...
 
-def set_skill_version_tag(*, name: str, version: str, key: str, value: str) -> None: ...
+def set_skill_version_tag(*, name: str, version: int, key: str, value: str) -> None: ...
 
-def delete_skill_version_tag(*, name: str, version: str, key: str) -> None: ...
+def delete_skill_version_tag(*, name: str, version: int, key: str) -> None: ...
 
-def set_skill_alias(*, name: str, alias: str, version: str) -> None: ...
+def set_skill_alias(*, name: str, alias: str, version: int) -> None: ...
 
 def delete_skill_alias(*, name: str, alias: str) -> None: ...
 
@@ -1006,11 +984,11 @@ def set_skill_bundle_tag(*, name: str, key: str, value: str) -> None: ...
 
 def delete_skill_bundle_tag(*, name: str, key: str) -> None: ...
 
-def set_skill_bundle_version_tag(*, name: str, version: str, key: str, value: str) -> None: ...
+def set_skill_bundle_version_tag(*, name: str, version: int, key: str, value: str) -> None: ...
 
-def delete_skill_bundle_version_tag(*, name: str, version: str, key: str) -> None: ...
+def delete_skill_bundle_version_tag(*, name: str, version: int, key: str) -> None: ...
 
-def set_skill_bundle_alias(*, name: str, alias: str, version: str) -> None: ...
+def set_skill_bundle_alias(*, name: str, alias: str, version: int) -> None: ...
 
 def delete_skill_bundle_alias(*, name: str, alias: str) -> None: ...
 
@@ -1031,7 +1009,6 @@ class IntrospectedSkill:
 @dataclass
 class PluginIntrospectionResult:
     bundle_name: str | None
-    version: str | None
     skills: list[IntrospectedSkill]
     warnings: list[PluginImportWarning]
 
@@ -1072,7 +1049,7 @@ class PackageManagerCheckResult:
 class MlflowSkillLockEntry:
     entity_type: str
     name: str
-    version: str
+    version: int
     workspace: str
     package_manager: str
     harness: str
@@ -1092,7 +1069,6 @@ def import_bundle(
     *,
     source: str,
     bundle_name: str | None = None,
-    version: str | None = None,
     source_type: str | None = None,
     subpath: str | None = None,
 ) -> PluginImportResult:
@@ -1112,7 +1088,7 @@ def install_skill(
     *,
     name: str,
     harness: str | None = None,
-    version: str | None = None,
+    version: int | None = None,
     alias: str | None = None,
     package_manager: str | None = None,
     scope: str = "project",
@@ -1132,7 +1108,7 @@ def install_bundle(
     *,
     name: str,
     harness: str | None = None,
-    version: str | None = None,
+    version: int | None = None,
     alias: str | None = None,
     package_manager: str | None = None,
     scope: str = "project",
@@ -1148,6 +1124,15 @@ def install_bundle(
     and pass the local path directly to the package manager."""
 
 
+def update_installed_skills() -> list[InstalledSkill]: ...
+
+
+def uninstall_skill(*, name: str) -> None: ...
+
+
+def uninstall_bundle(*, name: str) -> None: ...
+
+
 def install_from_lock(
     *, lock_file: str = "mlflow-skills.lock",
 ) -> list[PackageManagerInstallResult]:
@@ -1159,7 +1144,7 @@ def pull(
     *,
     name: str | None = None,
     bundle: str | None = None,
-    version: str | None = None,
+    version: int | None = None,
     alias: str | None = None,
     destination: str = ".",
 ) -> str:
@@ -1177,7 +1162,7 @@ def search_skill_traces(
     *,
     experiment_ids: list[str] | None = None,
     skill_name: str | None = None,
-    skill_version: str | None = None,
+    skill_version: int | None = None,
     workspace: str | None = None,
     filter_string: str | None = None,
     max_results: int = 100,
@@ -1193,9 +1178,9 @@ def search_skill_traces(
 
 
 # Example usage:
-version = mlflow.genai.register_skill(name="code-review", version="1.0.0", source_type="git", source="...")
+version = mlflow.genai.register_skill(name="code-review", source_type="git", source="...")
 servers = mlflow.genai.search_skills(filter_string="status = 'active'")
-traces = mlflow.search_skill_traces(skill_name="code-review", skill_version="1.0.0")
+traces = mlflow.search_skill_traces(skill_name="code-review", skill_version=1)
 ```
 
 `search_skill_traces()` filters to traces containing `SKILL` spans
@@ -1338,7 +1323,6 @@ class UpdateSkillRequest(BaseModel):
 
 class CreateSkillVersionRequest(BaseModel):
     name: str | None = None  # optional for POST /register (inferred from source when omitted); ignored for POST /{name}/versions (name from path)
-    version: str
     display_name: str | None = None
     source_type: str | None = None
     source: str | None = None
@@ -1364,7 +1348,6 @@ class UpdateSkillBundleRequest(BaseModel):
 
 
 class CreateSkillBundleVersionRequest(BaseModel):
-    version: str
     display_name: str | None = None
     skills: list[str] | None = None
     source_type: str | None = None
@@ -1380,12 +1363,12 @@ class UpdateSkillBundleVersionRequest(BaseModel):
 
 class AliasResponse(BaseModel):
     alias: str
-    version: str
+    version: int
 
 
 class SetAliasRequest(BaseModel):
     alias: str
-    version: str
+    version: int
 
 
 class SetTagRequest(BaseModel):
@@ -1395,7 +1378,7 @@ class SetTagRequest(BaseModel):
 
 class SkillVersionResponse(BaseModel):
     name: str
-    version: str
+    version: int
     display_name: str | None = None
     source_type: str | None = None
     source: str | None = None
@@ -1416,7 +1399,7 @@ class SkillResponse(BaseModel):
     display_name: str | None = None
     description: str | None = None
     status: str | None = None
-    latest_version: str | None = None
+    latest_version: int | None = None
     aliases: list[AliasResponse] = Field(default_factory=list)
     tags: dict[str, str] = Field(default_factory=dict)
     created_by: str | None = None
@@ -1427,7 +1410,7 @@ class SkillResponse(BaseModel):
 
 class SkillBundleVersionResponse(BaseModel):
     name: str
-    version: str
+    version: int
     display_name: str | None = None
     source_type: str | None = None
     source: str | None = None
@@ -1449,7 +1432,7 @@ class SkillBundleResponse(BaseModel):
     display_name: str | None = None
     description: str | None = None
     status: str | None = None
-    latest_version: str | None = None
+    latest_version: int | None = None
     aliases: list[AliasResponse] = Field(default_factory=list)
     tags: dict[str, str] = Field(default_factory=dict)
     created_by: str | None = None
@@ -1458,7 +1441,7 @@ class SkillBundleResponse(BaseModel):
     last_updated_timestamp: int | None = None
 ```
 
-`Skill.aliases` is modeled as a `dict[str, str]` in the entity layer
+`Skill.aliases` is modeled as a `dict[str, int]` in the entity layer
 for convenience, while REST responses expose aliases as
 `list[AliasResponse]` to keep the payload shape explicit and
 consistent with the MCP Server Registry (RFC-0004).
@@ -1485,6 +1468,9 @@ provides the same operations from the command line:
 | `mlflow skills install` | `install_skill()` | Install one skill through a package manager plugin; `--local-path` skips fetch |
 | `mlflow skills bundles install` | `install_bundle()` | Install a bundle through a package manager plugin; `--local-path` skips fetch |
 | `mlflow skills install --from-lock` | `install_from_lock()` | Replay exact registry versions from an MLflow resolution lock |
+| `mlflow skills update` | `update_installed_skills()` | Re-resolve installed references and reinstall skills with newer versions |
+| `mlflow skills uninstall` | `uninstall_skill()` | Uninstall a skill and remove its manifest entry |
+| `mlflow skills bundles uninstall` | `uninstall_bundle()` | Uninstall a bundle and remove its manifest entry |
 | `mlflow skills bundles create` | `create_skill_bundle()` | Create a skill bundle |
 | `mlflow skills bundles create-version` | `create_skill_bundle_version()` | Create a bundle version with members |
 | `mlflow skills bundles get` | `get_skill_bundle()` | Get bundle metadata |
@@ -1518,12 +1504,10 @@ The registry server does not fetch user-supplied plugin URLs.
 discovery used by import but do not create or modify registry records.
 They accept either a local path or a remote Git, OCI, ZIP, or MLflow
 artifact source and return the discovered skill names and paths,
-available plugin name and version metadata, and warnings for
-unregistered non-skill content. A local path must not specify
-`source_type`; remote
-sources use an explicit source type or the same unambiguous syntax
-inference as import. Introspection does not require the plugin to provide
-a name or version because those values are only required when importing.
+available plugin name metadata, and warnings for unregistered
+non-skill content. A local path must not specify `source_type`;
+remote sources use an explicit source type or the same unambiguous
+syntax inference as import.
 
 ### Supported input format
 
@@ -1535,25 +1519,25 @@ by Claude Code and other harnesses. The importer:
    source-type-aware logic as `pull`.
 2. Applies `subpath`, when provided, to select the plugin root.
 3. Reads `.claude-plugin/plugin.json` when present to obtain supported
-   plugin metadata such as name and version. Explicit `bundle_name` and
-   `version` arguments take precedence.
+   plugin metadata such as name. An explicit `bundle_name` argument
+   takes precedence. Version is server-assigned at import time.
 4. Discovers skill directories that contain a SKILL.md entry point.
    The SKILL.md name is used when present; otherwise the directory
    name is used.
 5. Detects non-skill content for warning purposes only.
 
-The resulting bundle name and version must be available after explicit
-arguments and plugin metadata are considered. The version must be a
-valid semantic version. When `source_type` is omitted, the client infers
+The resulting bundle name must be available after explicit
+arguments and plugin metadata are considered. The version is
+server-assigned. When `source_type` is omitted, the client infers
 it from the source syntax and fails if the source type is ambiguous.
 
 ### Registration behavior
 
 For each discovered skill, the importer creates a `SkillVersion` whose
-version defaults to the bundle version and whose `source_type`, `source`,
+version is server-assigned and whose `source_type`, `source`,
 and `subpath` are null. The importer records the skill's plugin-relative
 directory as the `#subpath` fragment in the member URI (e.g.,
-`skills:/embedded-review/1.0.0#skills/embedded-review`).
+`skills:/embedded-review/1#skills/embedded-review`).
 
 After registering the embedded skills, the importer creates one
 monolithic `SkillBundleVersion` with the original `source_type`,
@@ -1561,11 +1545,11 @@ monolithic `SkillBundleVersion` with the original `source_type`,
 skills. This preserves a pullable link to the complete original plugin
 while keeping registry entries limited to skills.
 
-The import fails if no skills are discovered. It also preflights all
-target `(name, version)` pairs and fails if any skill or bundle version
-already exists. It never overwrites or reuses an existing version. A
-caller resolves a conflict by choosing a different bundle version or
-renaming the conflicting skill before import.
+The import fails if no skills are discovered. Since versions are
+server-assigned, import always creates new versions and does not
+conflict with existing version numbers. A name conflict (an existing
+skill with the same name) is resolved by the server creating the
+next version for that skill.
 
 ### Warnings and result
 
@@ -1793,7 +1777,7 @@ following attributes:
 | Attribute | Value | Description |
 |---|---|---|
 | `mlflow.skill.name` | Skill name | Registry name of the active skill |
-| `mlflow.skill.version` | Version string | Registered version |
+| `mlflow.skill.version` | Version number | Registered version (integer) |
 | `mlflow.skill.workspace` | Workspace name | Resolved from the install manifest, falling back to the current tracking URI's workspace context |
 
 These three attributes form the `{workspace, name, version}`
@@ -1870,7 +1854,6 @@ import mlflow
 
 mlflow.genai.register_skill(
     name="code-review",
-    version="1.0.0",
     source_type="oci",
     source="ghcr.io/acme/agent-plugin:v1.0.0",
     subpath="skills/code-review",
@@ -1878,7 +1861,6 @@ mlflow.genai.register_skill(
 
 mlflow.genai.register_skill(
     name="test-coverage",
-    version="2.1.0",
     source_type="oci",
     source="ghcr.io/acme/agent-plugin:v1.0.0",
     subpath="skills/test-coverage",
@@ -1887,10 +1869,9 @@ mlflow.genai.register_skill(
 # Assembled bundle: each member has its own source
 bundle_version = mlflow.genai.create_skill_bundle_version(
     name="pr-workflow",
-    version="1.0.0",
     skills=[
-        "skills:/code-review/1.0.0",
-        "skills:/test-coverage/2.1.0",
+        "skills:/code-review/1",
+        "skills:/test-coverage/1",
     ],
 )
 
@@ -1898,16 +1879,14 @@ bundle_version = mlflow.genai.create_skill_bundle_version(
 # versions are registered without their own sources.
 mlflow.genai.register_skill(
     name="embedded-review",
-    version="1.0.0",
 )
 
 bundle_version = mlflow.genai.create_skill_bundle_version(
     name="pr-workflow-mono",
-    version="1.0.0",
     source_type="oci",
     source="ghcr.io/acme/agent-plugin:v1.0.0",
     skills=[
-        "skills:/embedded-review/1.0.0#skills/embedded-review",
+        "skills:/embedded-review/1#skills/embedded-review",
     ],
 )
 ```
@@ -1929,7 +1908,7 @@ bundles = mlflow.genai.search_skill_bundles(
 # Get a specific version
 version = mlflow.genai.get_skill_version(
     name="code-review",
-    version="1.0.0",
+    version=1,
 )
 # version.source_type == "git"
 # version.source == "https://github.com/acme/agent-skills.git@v1.0.0"
@@ -1944,9 +1923,9 @@ version = mlflow.genai.get_skill_version_by_alias(
 # Get a bundle version and its pinned members
 bundle_version = mlflow.genai.get_skill_bundle_version(
     name="pr-workflow",
-    version="1.0.0",
+    version=1,
 )
-# bundle_version.skills == ["skills:/code-review/1.0.0", ...]
+# bundle_version.skills == ["skills:/code-review/1", ...]
 
 # Resolve a bundle alias
 bundle_version = mlflow.genai.get_skill_bundle_version_by_alias(

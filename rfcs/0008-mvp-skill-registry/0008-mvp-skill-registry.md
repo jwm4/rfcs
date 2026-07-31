@@ -98,7 +98,6 @@ import mlflow
 
 # Minimal: name inferred from SKILL.md content, source_type from URL
 mlflow.genai.register_skill(
-    version="1.0.0",
     source="https://github.com/acme/agent-skills.git@v1.0.0",
     subpath="code-review",
 )
@@ -106,7 +105,6 @@ mlflow.genai.register_skill(
 # Explicit: all fields specified
 mlflow.genai.register_skill(
     name="code-review",
-    version="1.0.0",
     source_type="git",
     source="https://github.com/acme/agent-skills.git@v1.0.0",
     subpath="code-review",
@@ -118,10 +116,9 @@ mlflow.genai.register_skill(
 ```python
 mlflow.genai.create_skill_bundle_version(
     name="pr-workflow",
-    version="1.0.0",
     skills=[
-        "skills:/code-review/1.0.0",
-        "skills:/style-check/2.0.0",
+        "skills:/code-review/1",
+        "skills:/style-check/1",
     ],
 )
 ```
@@ -132,7 +129,7 @@ mlflow.genai.create_skill_bundle_version(
 mlflow skills bundles import \
     --source https://github.com/acme/plugins.git@v1.0.0 \
     --subpath pr-workflow \
-    --skill-uri skills:/pr-workflow/1.0.0
+    --skill-uri skills:/pr-workflow
 ```
 
 MLflow discovers skill directories (subdirectories containing a
@@ -190,7 +187,7 @@ address:
    harness autologgers (see [Trace integration](#trace-integration)).
    Without a registry, organizations cannot answer questions like
    "which skill versions are most used?" or "show me all traces where
-   the deprecated code-review v1.0 was loaded."
+   the deprecated code-review version 1 was loaded."
 
 4. **No cross-source pull mechanism.** Skills may be distributed via
    Git, OCI registries, ZIP archives, or stored directly in MLflow.
@@ -207,14 +204,14 @@ Registry enables. Each shows both CLI and UI paths.
 1. Register individual skill versions pointing to their sources:
    ```bash
    # Minimal: name and source type inferred
-   mlflow skills register --version 1.0.0 \
+   mlflow skills register \
        --source https://github.com/acme/agent-skills.git@v1.0.0 \
        --subpath code-review
    # Explicit: all fields specified
-   mlflow skills register --skill-uri skills:/code-review/1.0.0 \
+   mlflow skills register --skill-uri skills:/code-review \
        --source https://github.com/acme/agent-skills.git@v1.0.0 \
        --subpath code-review
-   mlflow skills register --skill-uri skills:/style-check/2.0.0 \
+   mlflow skills register --skill-uri skills:/style-check \
        --source https://github.com/acme/agent-skills.git@v2.0.0 \
        --subpath style-check
    ```
@@ -224,26 +221,25 @@ Registry enables. Each shows both CLI and UI paths.
 
    mlflow.genai.register_skill(
        name="code-review",
-       version="1.0.0",
        source_type="git",
        source="https://github.com/acme/agent-skills.git@v1.0.0",
        subpath="code-review",
    )
    ```
    **UI path:** Navigate to the Skills page, click "Register Skill,"
-   fill in the source URL and version (name and source type are
+   fill in the source URL (name and source type are
    inferred when omitted), then submit.
 2. Create a skill bundle version that pins these members:
    ```bash
-   mlflow skills bundles create-version --skill-uri skills:/pr-workflow/1.0.0 \
-       --skill skills:/code-review/1.0.0 \
-       --skill skills:/style-check/2.0.0
+   mlflow skills bundles create-version --skill-uri skills:/pr-workflow \
+       --skill skills:/code-review/1 \
+       --skill skills:/style-check/1
    ```
    **UI path:** Navigate to the Bundles tab, click "Create Bundle,"
    add members by searching and selecting from registered skills.
 3. Transition the bundle version from draft to active:
    ```bash
-   mlflow skills bundles update-version --skill-uri skills:/pr-workflow/1.0.0 \
+   mlflow skills bundles update-version --skill-uri skills:/pr-workflow/1 \
        --status active
    ```
    **UI path:** Open the bundle version detail page, use the status
@@ -251,10 +247,10 @@ Registry enables. Each shows both CLI and UI paths.
 4. Set an alias for stable downstream resolution:
    ```bash
    mlflow skills bundles set-alias --skill-uri skills:/pr-workflow \
-       --alias production --version 1.0.0
+       --alias production --version 1
    ```
    **UI path:** In the bundle detail page, click "Add Alias" and map
-   `production` to version `1.0.0`.
+   `production` to version `1`.
 
 #### Import an existing plugin as a bundle
 
@@ -263,7 +259,7 @@ Registry enables. Each shows both CLI and UI paths.
    mlflow skills bundles import \
        --source https://github.com/acme/plugins.git@v1.0.0 \
        --subpath pr-workflow \
-       --skill-uri skills:/pr-workflow/1.0.0
+       --skill-uri skills:/pr-workflow
    ```
 2. MLflow fetches the source to a temporary directory in the client
    environment, discovers skill directories (subdirectories containing
@@ -302,12 +298,12 @@ Registry enables. Each shows both CLI and UI paths.
    version history, aliases, tags, and bundle memberships.
 4. Inspect a specific version's source and metadata:
    ```bash
-   mlflow skills get-version --skill-uri skills:/code-review/1.0.0
+   mlflow skills get-version --skill-uri skills:/code-review/1
    ```
 5. Pull the skill locally to read the content and decide whether
    it fits:
    ```bash
-   mlflow skills pull --skill-uri skills:/code-review/1.0.0 \
+   mlflow skills pull --skill-uri skills:/code-review/1 \
        --destination ./review-skill
    ```
 
@@ -350,29 +346,29 @@ analyze how skills were used during an agent run.
 
 1. Register a new version of the bundle with updated members:
    ```bash
-   mlflow skills register --skill-uri skills:/code-review/2.0.0 \
+   mlflow skills register --skill-uri skills:/code-review \
        --source https://github.com/acme/agent-skills.git@v2.0.0 \
        --subpath code-review
-   mlflow skills bundles create-version --skill-uri skills:/pr-workflow/2.0.0 \
-       --skill skills:/code-review/2.0.0 \
-       --skill skills:/style-check/2.0.0
+   mlflow skills bundles create-version --skill-uri skills:/pr-workflow \
+       --skill skills:/code-review/2 \
+       --skill skills:/style-check/1
    ```
-2. Install v1.0.0 and run it on a set of test inputs. Traces are
+2. Install version 1 and run it on a set of test inputs. Traces are
    recorded in MLflow under experiment A.
-3. Install v2.0.0 and run it on the same test inputs. Traces are
+3. Install version 2 and run it on the same test inputs. Traces are
    recorded under experiment B.
 4. Use `mlflow.genai.evaluate()` with a `make_judge` scorer that
    uses the `{{ trace }}` template variable to score both sets of
    traces against quality criteria (correctness, helpfulness, safety).
 5. Compare the evaluation results side by side in the MLflow UI to
-   determine whether v2.0.0 is an improvement.
-6. If v2.0.0 is better, transition it to active and update the
+   determine whether version 2 is an improvement.
+6. If version 2 is better, transition it to active and update the
    production alias:
    ```bash
-   mlflow skills bundles update-version --skill-uri skills:/pr-workflow/2.0.0 \
+   mlflow skills bundles update-version --skill-uri skills:/pr-workflow/2 \
        --status active
    mlflow skills bundles set-alias --skill-uri skills:/pr-workflow \
-       --alias production --version 2.0.0
+       --alias production --version 2
    ```
 
 #### Compare agent performance with and without a skill
@@ -444,7 +440,7 @@ traces contain SKILL spans annotated with registry coordinates.
    traces = mlflow.search_skill_traces(
        experiment_ids=[experiment_id],
        skill_name="code-review",
-       skill_version="1.0.0",
+       skill_version=1,
    )
    ```
    Evaluation results for these traces can then be retrieved via
@@ -462,12 +458,12 @@ intermediate trace lookup) remains future work.
    source repo.
 2. The job registers a new skill version from the updated source:
    ```bash
-   mlflow skills register --skill-uri skills:/code-review/1.1.0 \
+   mlflow skills register --skill-uri skills:/code-review \
        --source https://github.com/acme/agent-skills.git@v1.1.0 \
        --subpath code-review
-   mlflow skills bundles create-version --skill-uri skills:/pr-workflow/1.1.0 \
-       --skill skills:/code-review/1.1.0 \
-       --skill skills:/style-check/2.0.0
+   mlflow skills bundles create-version --skill-uri skills:/pr-workflow \
+       --skill skills:/code-review/2 \
+       --skill skills:/style-check/1
    ```
 3. The job installs the new bundle version and runs it against a
    benchmark dataset, collecting traces in a dedicated MLflow
@@ -543,13 +539,13 @@ SkillBundleVersionMember }o--|| SkillVersion : "skill member"
 
 SkillBundleVersionMember {
   string member_name
-  string member_version
+  int member_version
   string member_subpath
 }
 ```
 
 The `SkillBundleVersionMember` fields are storage columns parsed
-from the member URI string (e.g., `skills:/code-review/1.0.0#path`
+from the member URI string (e.g., `skills:/code-review/1#path`
 decomposes into `member_name`, `member_version`, and
 `member_subpath`).
 
@@ -560,7 +556,7 @@ supporting files (scripts, templates, reference material). The
 `Skill` entity is the logical governed asset, scoped to a workspace.
 Key fields include `name` (unique within workspace), `display_name`,
 `status` (read-only, derived from the parent-resolved version),
-`latest_version` (read-only, highest active semver), and `aliases`.
+`latest_version` (read-only, highest active version number), and `aliases`.
 
 **UI fallback behavior**: `display_name` and `description` are stored
 on the parent entity. The API returns these fields exactly as stored;
@@ -568,9 +564,9 @@ when unset, the response value is `null`. The UI may apply
 presentation-only fallback: for `display_name`, fall back to `name`.
 For version-level fields shown on parent cards (e.g., `source_type`,
 `install_count`), the UI derives values from the latest-resolved
-version. Latest resolution prefers the highest semantic version among
-`active` versions; otherwise it falls back to the highest semantic
-version among non-`deleted` non-`active` versions. This fallback is
+version. Latest resolution prefers the highest version number among
+`active` versions; otherwise it falls back to the highest version
+number among non-`deleted` non-`active` versions. This fallback is
 a UI concern only and is not applied in the API or store layer. The
 same rules apply to `SkillBundle`.
 
@@ -578,7 +574,7 @@ same rules apply to `SkillBundle`.
 
 A versioned record containing a typed source pointer (`git`, `oci`,
 `zip`, or `mlflow`), status, and tags. The `(name, version)` pair is
-unique within a workspace. Source pointers and version strings are
+unique within a workspace. Source pointers and version numbers are
 immutable after creation; to point to different content, register a
 new version. The optional `subpath` field identifies content within a
 shared artifact (used with Git, OCI, and ZIP). The optional
@@ -639,7 +635,7 @@ which source is authoritative for skill content.
 
 All entity types use the same alias pattern: a frozen `(name, alias,
 version)` tuple mapping a stable name (e.g., `production`) to a
-specific version string. Tags are `(key, value)` pairs at both the
+specific version number. Tags are `(key, value)` pairs at both the
 entity level and version level.
 
 Dataclass definitions, field tables, source type details, and
@@ -708,20 +704,20 @@ rather than top-level hard delete.
 #### Entity-level status
 
 `Skill.status` and `SkillBundle.status` are read-only. They are
-derived from the parent-resolved version: the highest semantic version
-among `active` versions if one exists, otherwise the highest semantic
-version among non-`deleted` non-`active` versions. Deleted versions
+derived from the parent-resolved version: the highest version number
+among `active` versions if one exists, otherwise the highest version
+number among non-`deleted` non-`active` versions. Deleted versions
 never drive parent status. This follows the MCP Server Registry
 pattern (RFC-0004).
 
 #### `latest_version` resolution
 
-Version strings must follow [semantic versioning](https://semver.org/)
-(e.g., `1.0.0`, `2.1.0-beta.1`). `get_latest_skill_version(name)`
-returns the highest semantic version among `active` versions if one
-exists, otherwise the highest semantic version among non-`deleted`
-non-`active` versions. Prerelease identifiers participate in
-semantic-version ordering, while build metadata does not.
+Version numbers are server-assigned monotonic integers. Each new
+version for a given skill receives the next integer.
+`get_latest_skill_version(name)` returns the highest version number
+among `active` versions if one exists, otherwise the highest version
+number among non-`deleted` non-`active` versions.
+
 `latest_version` is a read-only computed field on the parent entity
 (not manually pinnable); aliases cover the use case of pointing a
 stable name (e.g., `production`) at a specific version.
@@ -737,6 +733,16 @@ The same rule applies to skill bundles:
 `get_latest_skill_bundle_version(...)`.
 
 This aligns with the MCP Server Registry (RFC-0004).
+
+> **Versioning divergence from RFC-0004.** The MCP Server Registry
+> uses publisher-supplied semantic versioning. This RFC intentionally
+> uses server-assigned monotonic integers instead, because skill
+> versioning is primarily a registry concern (tracking which snapshot
+> is deployed) rather than a release-engineering concern (communicating
+> API compatibility). If future requirements surface a need to
+> converge, both RFCs can be aligned in a follow-up without changing
+> the data model, since version is an opaque identifier from the
+> caller's perspective.
 
 ### Plugin import
 
@@ -769,8 +775,7 @@ content types so that the user is aware of what was not registered.
 Import does not install the plugin, generate a downstream manifest, or
 translate an MLflow bundle into another bundle format.
 
-The bundle version must have a valid semantic version, supplied by the
-caller or read from supported plugin metadata. Embedded skills use the
+The bundle version number is server-assigned. Embedded skills use the
 bundle version. Import never overwrites or reuses an existing skill or
 bundle version. The client checks for naming and version conflicts
 before creating registry records and fails the import if any target
@@ -864,7 +869,7 @@ displays:
 - Entity type badge (skill or bundle)
 - Name and optional display name
 - Description (truncated to 2-3 lines)
-- Latest version badge (e.g., "v1.0.0")
+- Latest version badge (e.g., "v1")
 - Status badge with color coding: draft (gray), active (green),
   deprecated (amber)
 - Source type indicator (Git, OCI, ZIP, MLflow)
@@ -892,7 +897,7 @@ The detail view for an individual skill shows:
   version detail page showing source, subpath, content digest, and
   tags.
 - **Aliases**: alias name to version mapping (e.g.,
-  `production -> 1.0.0`)
+  `production -> 1`)
 - **Tags**: key-value list with edit controls
 - **Bundle memberships**: list of bundles that include this skill,
   with links to each bundle's detail page
@@ -938,7 +943,7 @@ attributes:
 
 ```python
 with mlflow.skill_context(
-    name="code-review", version="1.0.0"
+    name="code-review", version=1
 ) as span:
     # All spans created inside this block (including those from
     # autologgers) become children of this SKILL span.
@@ -958,9 +963,9 @@ Skills can invoke other skills. Nesting `skill_context()` calls
 produces a skill stack in the trace tree:
 
 ```
-+-- Span: "code-review" (type: SKILL, version: 1.0.0)
++-- Span: "code-review" (type: SKILL, version: 1)
 |   +-- Span: ChatCompletion (type: LLM)
-|   +-- Span: "style-check" (type: SKILL, version: 2.0.0)
+|   +-- Span: "style-check" (type: SKILL, version: 1)
 |   |   +-- Span: ChatCompletion (type: LLM)
 |   +-- Span: ChatCompletion (type: LLM)
 ```
@@ -1035,7 +1040,7 @@ arguments for common skill trace lookups:
 traces = mlflow.search_skill_traces(
     experiment_ids=[experiment_id],
     skill_name="code-review",
-    skill_version="1.0.0",
+    skill_version=1,
 )
 ```
 
@@ -1091,6 +1096,11 @@ from source and passes the local path directly to the package manager.
 Users who only want to download content without installing it into a
 harness use the package-manager-free `mlflow skills pull`
 command.
+
+`mlflow skills update` re-resolves installed references and reinstalls
+skills with newer versions available. `mlflow skills uninstall` and
+`mlflow skills bundles uninstall` remove installed skills or bundles
+and clean up manifest entries.
 
 **Why MLflow materializes locally.** MLflow resolves registry
 coordinates (versions, aliases, workspaces) and fetches content from the
@@ -1234,12 +1244,12 @@ creation:
   "skills": {
     "code-review": {
       "name": "code-review",
-      "version": "1.0.0",
+      "version": 1,
       "workspace": "default"
     },
     "style-check": {
       "name": "style-check",
-      "version": "2.0.0",
+      "version": 1,
       "workspace": "default"
     }
   }
