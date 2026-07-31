@@ -563,6 +563,7 @@ class SkillRegistryMixin:
         source: str | None = None,
         subpath: str | None = None,
         content_digest: str | None = None,
+        status: str = "draft",
     ) -> SkillVersion:
         raise NotImplementedError(self.__class__.__name__)
 
@@ -784,9 +785,11 @@ def register_skill(
     *,
     name: str,
     version: str,
+    display_name: str | None = None,
     source_type: str | None = None,
     source: str | None = None,
     subpath: str | None = None,
+    status: str = "draft",
     content_path: str | None = None,
     content_digest: str | None = None,
 ) -> SkillVersion:
@@ -1022,6 +1025,18 @@ class PackageManagerInstallResult:
     skills: list[InstalledSkill]
 
 
+@dataclass
+class PackageManagerInfo:
+    name: str
+    harnesses: list[str]
+
+
+@dataclass
+class PackageManagerCheckResult:
+    satisfied: bool
+    message: str | None = None
+
+
 @dataclass(frozen=True)
 class MlflowSkillLockEntry:
     entity_type: str
@@ -1069,11 +1084,14 @@ def install_skill(
     package_manager: str | None = None,
     scope: str = "project",
     lock_file: str | None = None,
+    local_path: str | None = None,
 ) -> PackageManagerInstallResult:
     """Resolve a skill and install it through a package manager plugin.
     The harness argument is required to keep behavior predictable
     across plugins. If lock_file is provided, record the exact resolved
-    version and installation inputs for replay."""
+    version and installation inputs for replay. If local_path is
+    provided, skip fetching from source and pass the local path
+    directly to the package manager."""
 
 
 def install_bundle(
@@ -1085,13 +1103,15 @@ def install_bundle(
     package_manager: str | None = None,
     scope: str = "project",
     lock_file: str | None = None,
+    local_path: str | None = None,
 ) -> PackageManagerInstallResult:
     """Resolve a bundle and install it through a package manager plugin.
     For monolithic bundles, non-skill content is included in the
     installed artifact. The harness argument is required to keep
     behavior predictable across plugins. If lock_file is provided,
     record the exact resolved version and installation inputs for
-    replay."""
+    replay. If local_path is provided, skip fetching from source
+    and pass the local path directly to the package manager."""
 
 
 def install_from_lock(
@@ -1112,6 +1132,11 @@ def pull(
     """Pull skill or bundle content from registered sources to a
     local directory. Specify name for a single skill or bundle
     for a skill bundle."""
+
+
+def list_package_managers() -> list[PackageManagerInfo]:
+    """List installed package manager plugins and their supported
+    harnesses. Discovers plugins via the entrypoint mechanism."""
 
 
 def search_skill_traces(
@@ -1136,7 +1161,7 @@ def search_skill_traces(
 # Example usage:
 version = mlflow.genai.register_skill(name="code-review", version="1.0.0", source_type="git", source="...")
 servers = mlflow.genai.search_skills(filter_string="status = 'active'")
-traces = mlflow.genai.search_skill_traces(skill_name="code-review", skill_version="1.0.0")
+traces = mlflow.search_skill_traces(skill_name="code-review", skill_version="1.0.0")
 ```
 
 `search_skill_traces()` filters to traces containing `SKILL` spans
@@ -1233,8 +1258,11 @@ All paths relative to the logical skill-bundles router prefix.
 Search endpoints use page-token-based pagination and `filter_string`
 expressions following existing MLflow conventions.
 
-**Skills and bundles:** `name LIKE '%review%'`, `status = 'active'`,
+**Skills:** `name LIKE '%review%'`, `status = 'active'`,
 `tags.team = 'platform'`
+
+**Bundles:** Same as skills, plus `member_name = 'code-review'` to
+find bundles that include a given skill (reverse membership lookup)
 
 **Versions (all entity types):** `status = 'active'`,
 `source_type = 'git'`, `tags.approved = 'true'`
@@ -1266,6 +1294,7 @@ class CreateSkillVersionRequest(BaseModel):
     source: str | None = None
     subpath: str | None = None
     content_digest: str | None = None
+    status: str = "draft"
 
 
 class UpdateSkillVersionRequest(BaseModel):
@@ -1396,42 +1425,41 @@ The `mlflow.genai` module exposes the public registry functions,
 delegating to `MlflowClient`, plus client-side import, pull, and
 package-manager installation operations that compose those registry
 functions. Skill-specific entity and request types are also re-exported
-from `mlflow.genai`. The `mlflow skills-registry` CLI command group
+from `mlflow.genai`. The `mlflow skills` CLI command group
 provides the same operations from the command line:
 
 | CLI subcommand | SDK function | Description |
 |---|---|---|
-| `mlflow skills-registry register` | `register_skill()` | Register a skill version (auto-creates parent) |
-| `mlflow skills-registry get` | `get_skill()` | Get skill metadata |
-| `mlflow skills-registry search` | `search_skills()` | Search skills |
-| `mlflow skills-registry get-version` | `get_skill_version()` | Get a specific version |
-| `mlflow skills-registry update-version` | `update_skill_version()` | Update version status |
-| `mlflow skills-registry set-alias` | `set_skill_alias()` | Set a version alias |
-| `mlflow skills-registry set-tag` | `set_skill_tag()` | Set a tag |
-| `mlflow skills-registry pull` | `pull()` | Pull content to local filesystem |
-| `mlflow skills-registry install` | `install_skill()` | Install one skill through a package manager plugin; `--local-path` skips fetch |
-| `mlflow skills-registry bundles install` | `install_bundle()` | Install a bundle through a package manager plugin; `--local-path` skips fetch |
-| `mlflow skills-registry install --from-lock` | `install_from_lock()` | Replay exact registry versions from an MLflow resolution lock |
-| `mlflow skills-registry bundles create` | `create_skill_bundle()` | Create a skill bundle |
-| `mlflow skills-registry bundles create-version` | `create_skill_bundle_version()` | Create a bundle version with members |
-| `mlflow skills-registry bundles get` | `get_skill_bundle()` | Get bundle metadata |
-| `mlflow skills-registry bundles search` | `search_skill_bundles()` | Search bundles |
-| `mlflow skills-registry bundles search-versions` | `search_skill_bundle_versions()` | Search bundle versions |
-| `mlflow skills-registry bundles set-alias` | `set_skill_bundle_alias()` | Set a bundle alias |
-| `mlflow skills-registry bundles set-tag` | `set_skill_bundle_tag()` | Set a bundle-level tag |
-| `mlflow skills-registry bundles set-version-tag` | `set_skill_bundle_version_tag()` | Set a bundle version tag |
-| `mlflow skills-registry bundles update-version` | `update_skill_bundle_version()` | Update bundle version status |
-| `mlflow skills-registry bundles introspect` | `introspect_bundle()` | Preview a local or remote plugin without registry writes |
-| `mlflow skills-registry bundles import` | `import_bundle()` | Import a plugin as a monolithic bundle |
-| `mlflow skills-registry list-package-managers` | `list_package_managers()` | List installed package manager plugins and their supported harnesses |
+| `mlflow skills register` | `register_skill()` | Register a skill version (auto-creates parent) |
+| `mlflow skills get` | `get_skill()` | Get skill metadata |
+| `mlflow skills search` | `search_skills()` | Search skills |
+| `mlflow skills get-version` | `get_skill_version()` | Get a specific version |
+| `mlflow skills update-version` | `update_skill_version()` | Update version status |
+| `mlflow skills set-alias` | `set_skill_alias()` | Set a version alias |
+| `mlflow skills set-tag` | `set_skill_tag()` | Set a tag |
+| `mlflow skills pull` | `pull()` | Pull content to local filesystem |
+| `mlflow skills install` | `install_skill()` | Install one skill through a package manager plugin; `--local-path` skips fetch |
+| `mlflow skills bundles install` | `install_bundle()` | Install a bundle through a package manager plugin; `--local-path` skips fetch |
+| `mlflow skills install --from-lock` | `install_from_lock()` | Replay exact registry versions from an MLflow resolution lock |
+| `mlflow skills bundles create` | `create_skill_bundle()` | Create a skill bundle |
+| `mlflow skills bundles create-version` | `create_skill_bundle_version()` | Create a bundle version with members |
+| `mlflow skills bundles get` | `get_skill_bundle()` | Get bundle metadata |
+| `mlflow skills bundles search` | `search_skill_bundles()` | Search bundles |
+| `mlflow skills bundles search-versions` | `search_skill_bundle_versions()` | Search bundle versions |
+| `mlflow skills bundles set-alias` | `set_skill_bundle_alias()` | Set a bundle alias |
+| `mlflow skills bundles set-tag` | `set_skill_bundle_tag()` | Set a bundle-level tag |
+| `mlflow skills bundles set-version-tag` | `set_skill_bundle_version_tag()` | Set a bundle version tag |
+| `mlflow skills bundles update-version` | `update_skill_bundle_version()` | Update bundle version status |
+| `mlflow skills bundles introspect` | `introspect_bundle()` | Preview a local or remote plugin without registry writes |
+| `mlflow skills bundles import` | `import_bundle()` | Import a plugin as a monolithic bundle |
+| `mlflow skills list-package-managers` | `list_package_managers()` | List installed package manager plugins and their supported harnesses |
 
-**Relationship to existing `mlflow skills` CLI group.** MLflow already
-has an `mlflow skills` CLI group (`mlflow/cli/skills.py`) with two
-subcommands: `list` (list bundled Assistant skills) and `view`
-(view details of a bundled skill). These inspect the skills that
-ship with the MLflow installation (under `mlflow/assistant/skills/`),
-not registry-managed skills. The registry uses a separate
-`mlflow skills-registry` group to avoid confusion between the two.
+**Relationship to existing `mlflow skills` subcommands.** MLflow already
+has `mlflow skills list` and `mlflow skills view` subcommands
+(`mlflow/cli/skills.py`) that inspect the bundled Assistant skills
+shipping with the MLflow installation (under `mlflow/assistant/skills/`).
+The registry's subcommands use different names (e.g., `register`,
+`search`, `install`), so there is no direct conflict.
 
 ## Plugin import
 
@@ -1442,7 +1470,7 @@ The registry server does not fetch user-supplied plugin URLs.
 
 ### Read-only preview
 
-`introspect_bundle()` and `mlflow skills-registry bundles introspect` run the same plugin
+`introspect_bundle()` and `mlflow skills bundles introspect` run the same plugin
 discovery used by import but do not create or modify registry records.
 They accept either a local path or a remote Git, OCI, ZIP, or MLflow
 artifact source and return the discovered skill names and paths,
@@ -1560,11 +1588,11 @@ skills. The result must contain exactly one `InstalledSkill` for every
 requested registry skill; missing or duplicate mappings fail the install
 before MLflow writes its trace manifest or resolution lock.
 
-Both `mlflow skills-registry install` and `mlflow skills-registry
+Both `mlflow skills install` and `mlflow skills
 bundles install` require a package manager plugin. The caller can select
 a plugin explicitly, or MLflow uses the configured default. If no plugin
 is selected or available, installation fails with guidance to install or
-configure one; `mlflow skills-registry pull` remains available without a
+configure one; `mlflow skills pull` remains available without a
 package manager.
 
 ### Plugin protocol
@@ -1634,7 +1662,7 @@ lola = "lola_mlflow:LolaPlugin"
 
 ### Bundle installation flow
 
-When `mlflow skills-registry bundles install` is invoked:
+When `mlflow skills bundles install` is invoked:
 
 1. **Resolve:** MLflow calls `get_skill_bundle_version()` (or alias
    resolution) to obtain the bundle version and its member list.
@@ -1663,7 +1691,7 @@ When `mlflow skills-registry bundles install` is invoked:
 
 ### Single-skill installation flow
 
-When `mlflow skills-registry install` is invoked:
+When `mlflow skills install` is invoked:
 
 1. **Resolve:** MLflow calls `get_skill_version()`, alias resolution, or
    latest resolution to obtain the registered source pointer. `version`
