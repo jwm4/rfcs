@@ -145,7 +145,7 @@ Semantic version ordering and index follow the same pattern as
 | `bundle_version` | `String(256)` | PK, FK to `skill_bundle_versions` |
 | `member_name` | `String(256)` | PK |
 | `member_version` | `String(256)` | PK |
-| `member_subpath` | `String(2048)` | nullable; member path inside bundle artifact |
+| `member_subpath` | `String(2048)` | nullable; parsed from `#subpath` fragment of member URI |
 
 FK: `(workspace, bundle_name, bundle_version)` references
 `skill_bundle_versions`, CASCADE delete. A FK to `skill_versions`
@@ -429,14 +429,16 @@ version resolution follows the same fallback.
 A versioned snapshot of a skill bundle's membership. In this RFC, all
 members are skills.
 
+Bundle members are referenced by URI string rather than a separate
+data class. The URI format follows MLflow's `models:/name/version`
+convention:
+
+- `skills:/name/version` pins a specific version
+- `skills:/name@alias` resolves through an alias
+- `skills:/name/version#subpath` identifies an embedded skill inside
+  a monolithic bundle artifact (subpath relative to the bundle root)
+
 ```python
-@dataclass
-class SkillMemberRef:
-    name: str
-    version: str
-    member_subpath: str | None = None
-
-
 @dataclass
 class SkillBundleVersion:
     name: str
@@ -448,7 +450,7 @@ class SkillBundleVersion:
     content_digest: str | None = None
     status: SkillStatus = SkillStatus.DRAFT
     tags: dict[str, str] = field(default_factory=dict)
-    skills: list[SkillMemberRef] = field(default_factory=list)
+    skills: list[str] = field(default_factory=list)
     aliases: list[str] = field(default_factory=list)
     workspace: str | None = None
     install_count: int = 0
@@ -471,19 +473,19 @@ assembled, never both:
   image or Git repo) that contains the complete bundle. `pull`
   fetches the bundle artifact as a unit. Member skill versions may
   omit their own `source` because the bundle artifact is the
-  authoritative source. Every source-less member must provide a
-  membership `member_subpath` identifying where it lives inside the
-  bundle artifact.
+  authoritative source. Every source-less member must include a
+  `#subpath` fragment in its URI identifying where it lives inside
+  the bundle artifact (e.g., `skills:/name/1.0.0#skills/name`).
 - **Assembled:** has individual member references. Each skill member
   has its own source. `pull` fetches members individually. If a skill
   member has no source, `pull` fails rather than producing a partial
-  local bundle. For assembled bundles, `member_subpath` must be null
-  because the member's own `source` and `subpath` identify its
-  content.
+  local bundle. For assembled bundles, member URIs must not include
+  a `#subpath` fragment because the member's own `source` and
+  `subpath` identify its content.
 
-The API rejects attempts to set `member_subpath` on a membership whose
+The API rejects a member URI with a `#subpath` fragment when the
 member version has its own source. It also rejects a source-less member
-of a monolithic bundle when `member_subpath` is missing or empty.
+of a monolithic bundle when the URI lacks a `#subpath` fragment.
 
 **Immutability contract.** The member list and source fields of a
 bundle version are immutable after creation. To change the set of
@@ -496,6 +498,22 @@ the registry does not validate artifact contents at registration time.
 A member can appear in multiple bundles and multiple bundle versions.
 Membership is at the version level, so a bundle version is a
 reproducible snapshot of "these specific skill versions work together."
+
+### Skill URI format
+
+Bundle member references and CLI skill arguments use URI strings
+following the `models:/name/version` convention established by
+MLflow's Model Registry:
+
+| Pattern | Meaning | Example |
+|---------|---------|---------|
+| `skills:/name/version` | Pin a specific version | `skills:/code-review/1.0.0` |
+| `skills:/name@alias` | Resolve through an alias | `skills:/code-review@production` |
+| `skills:/name/version#subpath` | Embedded skill inside a monolithic bundle | `skills:/review/1.0.0#skills/review` |
+
+The server parses the URI into its constituent fields (`member_name`,
+`member_version`, `member_subpath`) for storage and validation. Alias
+URIs are resolved to a concrete version at the time of the API call.
 
 ## Store interface
 
@@ -676,7 +694,7 @@ class SkillRegistryMixin:
         name: str,
         version: str,
         display_name: str | None = None,
-        skills: list[SkillMemberRef] | None = None,
+        skills: list[str] | None = None,
         source_type: str | None = None,
         source: str | None = None,
         subpath: str | None = None,
@@ -900,7 +918,7 @@ def create_skill_bundle_version(
     name: str,
     version: str,
     display_name: str | None = None,
-    skills: list[SkillMemberRef] | None = None,
+    skills: list[str] | None = None,
     source_type: str | None = None,
     source: str | None = None,
     subpath: str | None = None,
@@ -1339,16 +1357,10 @@ class UpdateSkillBundleRequest(BaseModel):
     description: str | None = None
 
 
-class SkillMemberRefPayload(BaseModel):
-    name: str
-    version: str
-    member_subpath: str | None = None
-
-
 class CreateSkillBundleVersionRequest(BaseModel):
     version: str
     display_name: str | None = None
-    skills: list[SkillMemberRefPayload] | None = None
+    skills: list[str] | None = None
     source_type: str | None = None
     source: str | None = None
     subpath: str | None = None
@@ -1416,7 +1428,7 @@ class SkillBundleVersionResponse(BaseModel):
     subpath: str | None = None
     content_digest: str | None = None
     status: str = "draft"
-    skills: list[SkillMemberRefPayload] = Field(default_factory=list)
+    skills: list[str] = Field(default_factory=list)
     aliases: list[str] = Field(default_factory=list)
     tags: dict[str, str] = Field(default_factory=dict)
     install_count: int = 0
@@ -1534,7 +1546,8 @@ it from the source syntax and fails if the source type is ambiguous.
 For each discovered skill, the importer creates a `SkillVersion` whose
 version defaults to the bundle version and whose `source_type`, `source`,
 and `subpath` are null. The importer records the skill's plugin-relative
-directory as `SkillMemberRef.member_subpath`.
+directory as the `#subpath` fragment in the member URI (e.g.,
+`skills:/embedded-review/1.0.0#skills/embedded-review`).
 
 After registering the embedded skills, the importer creates one
 monolithic `SkillBundleVersion` with the original `source_type`,
@@ -1700,9 +1713,10 @@ When `mlflow skills bundles install` is invoked:
      using the same source-type-aware logic and retains the complete root
      as `bundle_path`, including opaque non-skill content. For each
      member, it resolves a local path by joining the pulled bundle root
-     with `member_subpath`. Every monolithic member must provide a
-     non-empty `member_subpath`; installation fails if the path is missing,
-     escapes the pulled bundle root after normalization, or does not
+     with the `#subpath` fragment from the member URI. Every monolithic
+     member URI must include a `#subpath` fragment; installation fails
+     if the fragment is missing, if the resolved path escapes the
+     pulled bundle root after normalization, or if the path does not
      contain the embedded skill.
 3. **Delegate:** MLflow passes `member_paths` and, for a monolithic
    bundle, `bundle_path` to the configured package manager plugin via
@@ -1803,7 +1817,8 @@ directory. Project entries take precedence over user entries with the
 same harness-local skill name.
 
 For a monolithic bundle, installation writes an entry for every
-registered embedded skill resolved through its `member_subpath`. For an
+registered embedded skill resolved through its member URI `#subpath`
+fragment. For an
 assembled bundle, it writes an entry for every installed member skill.
 The bundle itself does not produce a SKILL span because tracing is at
 the invoked-skill level.
@@ -1846,7 +1861,6 @@ still use `mlflow.skill_context()` manually.
 
 ```python
 import mlflow
-from mlflow.genai import SkillMemberRef
 
 mlflow.genai.register_skill(
     name="code-review",
@@ -1869,8 +1883,8 @@ bundle_version = mlflow.genai.create_skill_bundle_version(
     name="pr-workflow",
     version="1.0.0",
     skills=[
-        SkillMemberRef(name="code-review", version="1.0.0"),
-        SkillMemberRef(name="test-coverage", version="2.1.0"),
+        "skills:/code-review/1.0.0",
+        "skills:/test-coverage/2.1.0",
     ],
 )
 
@@ -1887,8 +1901,7 @@ bundle_version = mlflow.genai.create_skill_bundle_version(
     source_type="oci",
     source="ghcr.io/acme/agent-plugin:v1.0.0",
     skills=[
-        SkillMemberRef(name="embedded-review", version="1.0.0",
-                       member_subpath="skills/embedded-review"),
+        "skills:/embedded-review/1.0.0#skills/embedded-review",
     ],
 )
 ```
@@ -1927,7 +1940,7 @@ bundle_version = mlflow.genai.get_skill_bundle_version(
     name="pr-workflow",
     version="1.0.0",
 )
-# bundle_version.skills == [SkillMemberRef(name="code-review", version="1.0.0"), ...]
+# bundle_version.skills == ["skills:/code-review/1.0.0", ...]
 
 # Resolve a bundle alias
 bundle_version = mlflow.genai.get_skill_bundle_version_by_alias(

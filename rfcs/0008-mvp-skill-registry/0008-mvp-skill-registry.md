@@ -116,14 +116,12 @@ mlflow.genai.register_skill(
 ## Create a skill bundle
 
 ```python
-from mlflow.genai import SkillMemberRef
-
 mlflow.genai.create_skill_bundle_version(
     name="pr-workflow",
     version="1.0.0",
     skills=[
-        SkillMemberRef(name="code-review", version="1.0.0"),
-        SkillMemberRef(name="style-check", version="2.0.0"),
+        "skills:/code-review/1.0.0",
+        "skills:/style-check/2.0.0",
     ],
 )
 ```
@@ -239,8 +237,8 @@ Registry enables. Each shows both CLI and UI paths.
 2. Create a skill bundle version that pins these members:
    ```bash
    mlflow skills bundles create-version --name pr-workflow --version 1.0.0 \
-       --skill code-review:1.0.0 \
-       --skill style-check:2.0.0
+       --skill skills:/code-review/1.0.0 \
+       --skill skills:/style-check/2.0.0
    ```
    **UI path:** Navigate to the Bundles tab, click "Create Bundle,"
    add members by searching and selecting from registered skills.
@@ -274,8 +272,8 @@ Registry enables. Each shows both CLI and UI paths.
    a SKILL.md entry point), and cleans up the temporary copy after
    registration completes.
 3. MLflow registers each discovered skill as an embedded, source-less
-   skill version and records its path as `member_subpath` in a new
-   monolithic bundle version. The bundle retains the original plugin
+   skill version and records its path as the `#subpath` fragment
+   in the member URI of a new monolithic bundle version. The bundle retains the original plugin
    source pointer.
 4. If the plugin also contains subagents, hooks, or MCP configuration,
    MLflow prints a warning that non-skill content does not receive
@@ -358,8 +356,8 @@ analyze how skills were used during an agent run.
        --source https://github.com/acme/agent-skills.git@v2.0.0 \
        --subpath code-review
    mlflow skills bundles create-version --name pr-workflow --version 2.0.0 \
-       --skill code-review:2.0.0 \
-       --skill style-check:2.0.0
+       --skill skills:/code-review/2.0.0 \
+       --skill skills:/style-check/2.0.0
    ```
 2. Install v1.0.0 and run it on a set of test inputs. Traces are
    recorded in MLflow under experiment A.
@@ -470,8 +468,8 @@ intermediate trace lookup) remains future work.
        --source https://github.com/acme/agent-skills.git@v1.1.0 \
        --subpath code-review
    mlflow skills bundles create-version --name pr-workflow --version 1.1.0 \
-       --skill code-review:1.1.0 \
-       --skill style-check:2.0.0
+       --skill skills:/code-review/1.1.0 \
+       --skill skills:/style-check/2.0.0
    ```
 3. The job installs the new bundle version and runs it against a
    benchmark dataset, collecting traces in a dedicated MLflow
@@ -613,8 +611,11 @@ MCP server references), enabling full "plugin"-style bundles.
 
 #### SkillBundleVersion
 
-A versioned snapshot of a bundle's membership. A bundle version is
-one of two kinds:
+A versioned snapshot of a bundle's membership. Members are referenced
+by URI string following the `models:/name/version` convention:
+`skills:/name/version`, `skills:/name@alias`, or
+`skills:/name/version#subpath` (for embedded skills in monolithic
+bundles). A bundle version is one of two kinds:
 
 - **Assembled:** captures member references for individual skills.
   Each skill version has its own source. `pull` fetches members
@@ -623,8 +624,8 @@ one of two kinds:
   image or Git repo containing multiple skills) and member
   references. Skill member versions may omit their own sources when
   their content lives inside the bundle artifact. A source-less member
-  must provide `member_subpath` to identify where it lives inside the
-  bundle artifact. `pull` fetches the bundle artifact as a unit.
+  must include a `#subpath` fragment in its member URI to identify
+  where it lives inside the bundle artifact. `pull` fetches the bundle artifact as a unit.
 
 A bundle version cannot have both a bundle-level source and skill
 member versions with their own sources. This avoids confusion about
@@ -753,8 +754,9 @@ registered bundle retains a pullable source pointer.
 The client fetches the plugin from a Git, OCI, ZIP, or MLflow artifact
 source and inspects it locally. It discovers directories containing a
 SKILL.md entry point, creates embedded skill versions without individual
-source pointers, and records each directory as the membership
-`member_subpath`. It then creates a monolithic bundle version whose
+source pointers, and records each directory as the `#subpath`
+fragment in the member URI. It then creates a monolithic bundle
+version whose
 source fields preserve the original plugin location.
 
 Non-skill content remains in the source artifact but is not registered
@@ -1197,7 +1199,7 @@ When `mlflow skills bundles install` is invoked:
    - For a monolithic bundle, MLflow pulls the bundle source once and
      retains the complete pulled root as `bundle_path`, including opaque
      non-skill content, while resolving each skill path from that root
-     and the member's `member_subpath`.
+     and the member URI's `#subpath` fragment.
 3. MLflow passes the skill-name-to-local-path mapping and, for a
    monolithic bundle, the complete `bundle_path` to the configured
    package manager plugin. The plugin handles harness-specific placement
