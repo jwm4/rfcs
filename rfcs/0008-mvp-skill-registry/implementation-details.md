@@ -501,16 +501,22 @@ reproducible snapshot of "these specific skill versions work together."
 
 ### Skill URI format
 
-Bundle member references and CLI skill arguments use URI strings
-following the `models:/name/version` convention established by
-MLflow's Model Registry:
+Skill URIs are used for CLI target identification and bundle
+member lists, following the `models:/name/version` convention
+established by MLflow's Model Registry. The Python SDK and REST
+API continue to use separate `name`, `version`, and `alias`
+parameters for primary resource identification.
 
 | Pattern | Meaning | Example |
 |---------|---------|---------|
+| `skills:/name` | Identify a skill (name only) | `skills:/code-review` |
 | `skills:/name/version` | Pin a specific version | `skills:/code-review/1.0.0` |
 | `skills:/name@alias` | Resolve through an alias | `skills:/code-review@production` |
 | `skills:/name/version#subpath` | Embedded skill inside a monolithic bundle | `skills:/review/1.0.0#skills/review` |
 
+In the CLI, every command that targets a skill or bundle accepts a
+`--skill-uri` flag (parallel to `--model-uri` in `mlflow models`).
+In bundle member lists, URIs appear as plain strings in `list[str]`.
 The server parses the URI into its constituent fields (`member_name`,
 `member_version`, `member_subpath`) for storage and validation. Alias
 URIs are resolved to a concrete version at the time of the API call.

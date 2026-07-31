@@ -132,8 +132,7 @@ mlflow.genai.create_skill_bundle_version(
 mlflow skills bundles import \
     --source https://github.com/acme/plugins.git@v1.0.0 \
     --subpath pr-workflow \
-    --bundle-name pr-workflow \
-    --version 1.0.0
+    --skill-uri skills:/pr-workflow/1.0.0
 ```
 
 MLflow discovers skill directories (subdirectories containing a
@@ -145,11 +144,11 @@ non-skill content that is not registered as individual entities.
 
 ```bash
 # Install a skill bundle for Claude Code via a package manager
-mlflow skills bundles install --name pr-workflow --alias production \
+mlflow skills bundles install --skill-uri skills:/pr-workflow@production \
     --harness claude-code
 
 # Or install a single skill through the same package-manager layer
-mlflow skills install --name code-review --alias production \
+mlflow skills install --skill-uri skills:/code-review@production \
     --harness claude-code
 ```
 
@@ -212,10 +211,10 @@ Registry enables. Each shows both CLI and UI paths.
        --source https://github.com/acme/agent-skills.git@v1.0.0 \
        --subpath code-review
    # Explicit: all fields specified
-   mlflow skills register --name code-review --version 1.0.0 \
+   mlflow skills register --skill-uri skills:/code-review/1.0.0 \
        --source https://github.com/acme/agent-skills.git@v1.0.0 \
        --subpath code-review
-   mlflow skills register --name style-check --version 2.0.0 \
+   mlflow skills register --skill-uri skills:/style-check/2.0.0 \
        --source https://github.com/acme/agent-skills.git@v2.0.0 \
        --subpath style-check
    ```
@@ -236,7 +235,7 @@ Registry enables. Each shows both CLI and UI paths.
    inferred when omitted), then submit.
 2. Create a skill bundle version that pins these members:
    ```bash
-   mlflow skills bundles create-version --name pr-workflow --version 1.0.0 \
+   mlflow skills bundles create-version --skill-uri skills:/pr-workflow/1.0.0 \
        --skill skills:/code-review/1.0.0 \
        --skill skills:/style-check/2.0.0
    ```
@@ -244,14 +243,14 @@ Registry enables. Each shows both CLI and UI paths.
    add members by searching and selecting from registered skills.
 3. Transition the bundle version from draft to active:
    ```bash
-   mlflow skills bundles update-version --name pr-workflow \
-       --version 1.0.0 --status active
+   mlflow skills bundles update-version --skill-uri skills:/pr-workflow/1.0.0 \
+       --status active
    ```
    **UI path:** Open the bundle version detail page, use the status
    dropdown to change from "draft" to "active."
 4. Set an alias for stable downstream resolution:
    ```bash
-   mlflow skills bundles set-alias --name pr-workflow \
+   mlflow skills bundles set-alias --skill-uri skills:/pr-workflow \
        --alias production --version 1.0.0
    ```
    **UI path:** In the bundle detail page, click "Add Alias" and map
@@ -264,8 +263,7 @@ Registry enables. Each shows both CLI and UI paths.
    mlflow skills bundles import \
        --source https://github.com/acme/plugins.git@v1.0.0 \
        --subpath pr-workflow \
-       --bundle-name pr-workflow \
-       --version 1.0.0
+       --skill-uri skills:/pr-workflow/1.0.0
    ```
 2. MLflow fetches the source to a temporary directory in the client
    environment, discovers skill directories (subdirectories containing
@@ -298,18 +296,18 @@ Registry enables. Each shows both CLI and UI paths.
    tags.
 3. Get details on a promising result:
    ```bash
-   mlflow skills get --name code-review
+   mlflow skills get --skill-uri skills:/code-review
    ```
    **UI path:** Click a card to open the detail view with metadata,
    version history, aliases, tags, and bundle memberships.
 4. Inspect a specific version's source and metadata:
    ```bash
-   mlflow skills get-version --name code-review --version 1.0.0
+   mlflow skills get-version --skill-uri skills:/code-review/1.0.0
    ```
 5. Pull the skill locally to read the content and decide whether
    it fits:
    ```bash
-   mlflow skills pull --name code-review --version 1.0.0 \
+   mlflow skills pull --skill-uri skills:/code-review/1.0.0 \
        --destination ./review-skill
    ```
 
@@ -317,7 +315,7 @@ Registry enables. Each shows both CLI and UI paths.
 
 1. Install the bundle using a package manager plugin:
    ```bash
-   mlflow skills bundles install --name pr-workflow --alias production \
+   mlflow skills bundles install --skill-uri skills:/pr-workflow@production \
        --harness claude-code
    ```
    This resolves the bundle from the registry, pulls the bundle
@@ -326,7 +324,7 @@ Registry enables. Each shows both CLI and UI paths.
    manifest (`mlflow-skills-manifest.json`) with installed registry
    coordinates. A single skill uses the same package-manager layer:
    ```bash
-   mlflow skills install --name code-review --alias production \
+   mlflow skills install --skill-uri skills:/code-review@production \
        --harness claude-code
    ```
 2. Ensure MLflow tracing is enabled for the target harness
@@ -352,10 +350,10 @@ analyze how skills were used during an agent run.
 
 1. Register a new version of the bundle with updated members:
    ```bash
-   mlflow skills register --name code-review --version 2.0.0 \
+   mlflow skills register --skill-uri skills:/code-review/2.0.0 \
        --source https://github.com/acme/agent-skills.git@v2.0.0 \
        --subpath code-review
-   mlflow skills bundles create-version --name pr-workflow --version 2.0.0 \
+   mlflow skills bundles create-version --skill-uri skills:/pr-workflow/2.0.0 \
        --skill skills:/code-review/2.0.0 \
        --skill skills:/style-check/2.0.0
    ```
@@ -371,9 +369,9 @@ analyze how skills were used during an agent run.
 6. If v2.0.0 is better, transition it to active and update the
    production alias:
    ```bash
-   mlflow skills bundles update-version --name pr-workflow \
-       --version 2.0.0 --status active
-   mlflow skills bundles set-alias --name pr-workflow \
+   mlflow skills bundles update-version --skill-uri skills:/pr-workflow/2.0.0 \
+       --status active
+   mlflow skills bundles set-alias --skill-uri skills:/pr-workflow \
        --alias production --version 2.0.0
    ```
 
@@ -388,7 +386,7 @@ runs the agent without the skill installed.
    are recorded in MLflow under experiment A (baseline).
 2. Install the skill:
    ```bash
-   mlflow skills install --name code-review --alias production \
+   mlflow skills install --skill-uri skills:/code-review@production \
        --harness claude-code
    ```
 3. Run the same agent on the same test inputs. Traces are recorded
@@ -464,10 +462,10 @@ intermediate trace lookup) remains future work.
    source repo.
 2. The job registers a new skill version from the updated source:
    ```bash
-   mlflow skills register --name code-review --version 1.1.0 \
+   mlflow skills register --skill-uri skills:/code-review/1.1.0 \
        --source https://github.com/acme/agent-skills.git@v1.1.0 \
        --subpath code-review
-   mlflow skills bundles create-version --name pr-workflow --version 1.1.0 \
+   mlflow skills bundles create-version --skill-uri skills:/pr-workflow/1.1.0 \
        --skill skills:/code-review/1.1.0 \
        --skill skills:/style-check/2.0.0
    ```
@@ -550,6 +548,11 @@ SkillBundleVersionMember {
 }
 ```
 
+The `SkillBundleVersionMember` fields are storage columns parsed
+from the member URI string (e.g., `skills:/code-review/1.0.0#path`
+decomposes into `member_name`, `member_version`, and
+`member_subpath`).
+
 #### Skill
 
 A skill is a directory containing a SKILL.md entry point plus
@@ -613,9 +616,10 @@ MCP server references), enabling full "plugin"-style bundles.
 
 A versioned snapshot of a bundle's membership. Members are referenced
 by URI string following the `models:/name/version` convention:
-`skills:/name/version`, `skills:/name@alias`, or
-`skills:/name/version#subpath` (for embedded skills in monolithic
-bundles). A bundle version is one of two kinds:
+`skills:/name` (name only), `skills:/name/version` (pinned version),
+`skills:/name@alias` (alias resolution), or
+`skills:/name/version#subpath` (embedded skills in monolithic bundles).
+A bundle version is one of two kinds:
 
 - **Assembled:** captures member references for individual skills.
   Each skill version has its own source. `pull` fetches members
