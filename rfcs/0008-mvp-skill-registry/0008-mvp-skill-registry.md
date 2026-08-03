@@ -26,7 +26,6 @@
   - [Workspace scoping](#workspace-scoping)
   - [Permissions](#permissions)
   - [UI](#ui)
-  - [Trace integration](#trace-integration)
   - [Package manager integration](#package-manager-integration)
 - [Drawbacks](#drawbacks)
 - [Alternatives](#alternatives)
@@ -39,8 +38,8 @@ AI agent skills. The registry stores metadata and typed source
 pointers (to Git repos, OCI registries, ZIP archives, etc.). It can
 also store content directly via MLflow artifact storage, but the
 primary design is metadata-first. It provides enterprise governance
-on top of existing distribution mechanisms: lifecycle management,
-usage analytics via traces, and federated discovery across sources.
+on top of existing distribution mechanisms: lifecycle management
+and federated discovery across sources.
 
 The registry manages two entity types under the `mlflow.genai` SDK
 namespace (CLI: `mlflow skills`), following the top-level
@@ -76,14 +75,6 @@ Existing Claude Code plugins can be imported as monolithic bundles:
 MLflow registers their discovered skills, preserves the plugin source,
 and warns about non-skill content that is pulled and installed alongside
 the skills but does not receive individual registry entries.
-
-Trace integration supports both manual and automatic instrumentation.
-`mlflow.skill_context()` lets SDK applications create SKILL spans
-explicitly. For installed skills, the Claude Code autologger
-uses the install-time trace manifest to create SKILL spans automatically.
-Both paths annotate spans with registry coordinates, enabling adoption
-tracking, deprecation impact analysis, per-skill cost attribution, and
-regression detection.
 
 [RFC-0009: Extended Skill Bundles](https://github.com/mlflow/rfcs/pull/27)
 will add registry entries for non-skill bundle members (e.g., subagents,
@@ -175,21 +166,7 @@ address:
    registries, or other distribution systems. There is no single
    discovery layer across all of these.
 
-3. **No trace-to-skill linkage.** MLflow already traces agent
-   conversations (Claude Code via `mlflow autolog claude`, SDK
-   applications via framework autologgers such as
-   `mlflow.langchain.autolog()` and `mlflow.anthropic.autolog()`).
-   These traces capture LLM calls, tool use, and token consumption,
-   but there is no way to know which governed, versioned skill was
-   active during any part of a trace. This RFC introduces
-   `mlflow.skill_context()` for manual instrumentation and an
-   install-time trace manifest for automatic instrumentation via
-   harness autologgers (see [Trace integration](#trace-integration)).
-   Without a registry, organizations cannot answer questions like
-   "which skill versions are most used?" or "show me all traces where
-   the deprecated code-review version 1 was loaded."
-
-4. **No cross-source pull mechanism.** Skills may be distributed via
+3. **No cross-source pull mechanism.** Skills may be distributed via
    Git, OCI registries, ZIP archives, or stored directly in MLflow.
    There is no standard way to fetch content from all of these with a
    single command.
@@ -197,7 +174,10 @@ address:
 ### User journeys
 
 These journeys illustrate the end-to-end workflows that the Skill
-Registry enables. Each shows both CLI and UI paths.
+Registry enables. Each shows both CLI and UI paths. The evaluation
+journeys below use existing MLflow tracing and evaluation
+infrastructure; registry-specific trace linkage (SKILL spans,
+`skill_context()`) is covered in a follow-on PR on this RFC.
 
 #### Register a skill bundle
 
@@ -307,42 +287,11 @@ Registry enables. Each shows both CLI and UI paths.
        --destination ./review-skill
    ```
 
-#### Install a skill bundle, run the agent, browse traces
-
-1. Install the bundle using a package manager plugin:
-   ```bash
-   mlflow skills bundles install --skill-uri skills:/pr-workflow@production \
-       --harness claude-code
-   ```
-   This resolves the bundle from the registry, pulls the bundle
-   content, delegates to the configured package manager (e.g., APM
-   or Lola) for harness-specific installation, and writes a trace
-   manifest (`mlflow-skills-manifest.json`) with installed registry
-   coordinates. A single skill uses the same package-manager layer:
-   ```bash
-   mlflow skills install --skill-uri skills:/code-review@production \
-       --harness claude-code
-   ```
-2. Ensure MLflow tracing is enabled for the target harness
-   (e.g., `mlflow autolog claude` for Claude Code).
-3. Run the agent. The harness loads the installed skills during a
-   conversation.
-4. Open the MLflow UI and navigate to the Traces page. Click the
-   "Skills" tab to filter for traces with SKILL spans.
-5. Find the trace for the agent run. Skill invocations appear as
-   SKILL spans in the trace tree, annotated with registry coordinates
-   (skill name, version, workspace).
-6. Click a SKILL span to see which registered skill version was used
-   and how long it took. Click the skill name link to navigate to the
-   skill's registry detail page.
-
 #### Evaluate two bundle versions with LLM judges
 
 MLflow's
 [LLM judges](https://mlflow.org/docs/latest/genai/eval-monitor/scorers/)
-can autonomously explore execution traces via MCP tools. Because
-skill invocations produce traced SKILL spans, LLM judges can
-analyze how skills were used during an agent run.
+can autonomously explore execution traces via MCP tools.
 
 1. Register a new version of the bundle with updated members:
    ```bash
@@ -386,8 +335,7 @@ runs the agent without the skill installed.
        --harness claude-code
    ```
 3. Run the same agent on the same test inputs. Traces are recorded
-   under experiment B. Skill invocations appear as SKILL spans in
-   the traces.
+   under experiment B.
 4. Use `mlflow.genai.evaluate()` with the same scorers on both
    experiments:
    ```python
@@ -399,58 +347,10 @@ runs the agent without the skill installed.
    )
    ```
 5. Compare the evaluation results side by side in the MLflow UI.
-   The SKILL spans in experiment B's traces confirm which skill
-   version was active during each run, enabling attribution of any
-   quality differences.
 
 The same pattern works for comparing different skill sets: install
 bundle A for one experiment, bundle B for another, and evaluate
 both against the same inputs and scorers.
-
-#### Trace skill lineage to evaluation results
-
-After running evaluations, a user wants to know which registered
-skill version was active during a traced agent run. The lineage
-path flows through traces: evaluation results link to traces, and
-traces contain SKILL spans annotated with registry coordinates.
-
-1. Run an agent with installed skills. Skill invocations produce
-   SKILL spans in the recorded traces (see
-   [Trace integration](#trace-integration)).
-2. Run evaluation against the collected traces:
-   ```python
-   results = mlflow.genai.evaluate(
-       data=traces_df,
-       scorers=[correctness_scorer, helpfulness_scorer],
-   )
-   ```
-   Each row in `results.result_df` includes a `trace_id` linking
-   the evaluation result back to its source trace.
-3. Find which skill versions were used in a specific evaluation
-   result:
-   ```python
-   trace = mlflow.get_trace(trace_id)
-   skill_spans = trace.search_spans(span_type="SKILL")
-   for span in skill_spans:
-       print(span.attributes["mlflow.skill.name"],
-             span.attributes["mlflow.skill.version"])
-   ```
-4. Find all traces that used a specific skill version:
-   ```python
-   traces = mlflow.search_skill_traces(
-       experiment_ids=[experiment_id],
-       skill_name="code-review",
-       skill_version=1,
-   )
-   ```
-   Evaluation results for these traces can then be retrieved via
-   their `trace_id` values.
-
-This two-step approach (query traces by skill attributes, then
-retrieve associated evaluation results) works with the skill
-trace query API and existing MLflow evaluation APIs. Filtering
-evaluation results directly by skill version (without the
-intermediate trace lookup) remains future work.
 
 #### CI pipeline for automated regression detection
 
@@ -665,7 +565,7 @@ stateDiagram-v2
 | State | Meaning | Downstream surfacing |
 |---|---|---|
 | `draft` | Registered but not yet ready for downstream use | Not surfaced to consumers |
-| `active` | Ready for downstream use | Surfaced to discovery, traces, consumers |
+| `active` | Ready for downstream use | Surfaced to discovery and consumers |
 | `deprecated` | Still functional but no longer recommended | Surfaced with deprecation signal |
 | `deleted` | Soft-deleted; preserved internally for history, no longer active | Not surfaced by normal get/search/list APIs |
 
@@ -772,8 +672,8 @@ source fields preserve the original plugin location.
 Non-skill content remains in the source artifact but is not registered
 as entities or members. The import result reports any unrecognized
 content types so that the user is aware of what was not registered.
-Import does not install the plugin, generate a downstream manifest, or
-translate an MLflow bundle into another bundle format.
+Import does not install the plugin or translate an MLflow bundle
+into another bundle format.
 
 The bundle version number is server-assigned. Embedded skills use the
 bundle version. Import never overwrites or reuses an existing skill or
@@ -901,9 +801,6 @@ The detail view for an individual skill shows:
 - **Tags**: key-value list with edit controls
 - **Bundle memberships**: list of bundles that include this skill,
   with links to each bundle's detail page
-- **Related traces**: link to the GenAI Traces page filtered by this
-  skill's name, showing recent SKILL spans that reference this skill
-
 #### Detail view: bundles
 
 The bundle detail view shows:
@@ -915,139 +812,6 @@ The bundle detail view shows:
 - **Version history table**: Version, Registered at, Status, Created
   by, Member count
 - **Aliases and tags** (as above)
-
-#### Trace integration display
-
-The GenAI Traces page includes a "Skills" tab alongside the existing
-"Prompts" tab, showing SKILL spans for each trace. The trace detail
-view displays SKILL spans with registry coordinates (skill name,
-version, workspace) and links to the skill's registry detail page.
-Skill version detail pages surface related traces using the same
-association data.
-
-### Trace integration
-
-MLflow already traces agent conversations across multiple frameworks:
-Claude Code (via `mlflow autolog claude`), SDK applications (via
-framework autologgers such as `mlflow.langchain.autolog()` and
-`mlflow.anthropic.autolog()`), and others. These traces capture LLM
-calls, tool use, and timing as a tree of spans. The skill registry
-closes the observability loop by letting agent developers indicate
-which registered skill is active during each part of a trace.
-
-#### `mlflow.skill_context()` context manager
-
-The primary instrumentation API is a context manager that creates a
-span of type `SKILL` and attaches registry coordinates as span
-attributes:
-
-```python
-with mlflow.skill_context(
-    name="code-review", version=1
-) as span:
-    # All spans created inside this block (including those from
-    # autologgers) become children of this SKILL span.
-    result = llm.chat([{"role": "user", "content": "Review this code..."}])
-```
-
-The context manager creates a span with `mlflow.skill.name`,
-`mlflow.skill.version`, and `mlflow.skill.workspace`
-attributes that link the span back to a specific skill version in
-the registry. See [implementation-details.md: skill_context() span
-attributes](implementation-details.md#skill_context-span-attributes)
-for the full attribute table.
-
-#### Skill stacks via nesting
-
-Skills can invoke other skills. Nesting `skill_context()` calls
-produces a skill stack in the trace tree:
-
-```
-+-- Span: "code-review" (type: SKILL, version: 1)
-|   +-- Span: ChatCompletion (type: LLM)
-|   +-- Span: "style-check" (type: SKILL, version: 1)
-|   |   +-- Span: ChatCompletion (type: LLM)
-|   +-- Span: ChatCompletion (type: LLM)
-```
-
-Walking up the ancestor chain and collecting SKILL spans reconstructs
-the skill stack for any span.
-
-#### Framework autologger compatibility
-
-Because `skill_context()` creates a standard MLflow span, it works
-with existing framework autologgers without modification. When a
-framework autologger (LangChain, OpenAI, Anthropic, etc.) creates a span
-inside a `skill_context()` block, that span automatically becomes a
-child of the SKILL span.
-
-#### Automatic harness instrumentation
-
-This RFC extends the Claude Code autologger to recognize skill
-invocations and create SKILL spans automatically. The autologger reads
-the `mlflow-skills-manifest.json` written during installation, maps the
-harness-local skill name to its registered `{workspace, name, version}`
-coordinates, and creates a SKILL span around the invocation. LLM and
-tool spans produced while the skill is active become children of that
-span.
-
-Automatic instrumentation runs in the process that owns the active
-trace, so it can preserve correct parent-child relationships without
-cross-process trace correlation. It does not perform a registry lookup
-during invocation. A missing, malformed, or unmatched manifest entry
-does not interrupt the agent run or other autologging; it only prevents
-creation of a registry-linked SKILL span for that invocation.
-
-The manifest and instrumentation contract are harness-neutral so other
-harness autologgers can adopt them later, but Claude Code integration is
-the automatic tracing implementation delivered in this RFC. See
-[implementation-details.md: Automatic trace
-instrumentation](implementation-details.md#automatic-trace-instrumentation).
-
-#### Registry validation
-
-`skill_context()` does not validate that the named skill exists in
-the registry at call time. Validating on every invocation would add
-latency and create a hard dependency on registry availability. The
-trace records the `{workspace, name, version}` coordinates
-regardless; the MLflow UI performs a best-effort lookup when
-displaying traces and shows a "not found in registry" indicator if
-the coordinates do not resolve.
-
-#### Workspace resolution
-
-When `skill_context()` is called, the workspace is resolved from
-the `mlflow-skills-manifest.json` written by the install commands.
-The manifest contains the workspace for each installed skill.
-For SDK users calling `skill_context()` directly without a manifest,
-the workspace defaults to the current MLflow tracking URI's workspace
-context, consistent with other MLflow operations.
-
-#### Relationship to MCP trace linking
-
-The MCP Registry (RFC-0004) uses after-the-fact, trace-level
-association (`link_mcp_server_versions_to_trace()`). Skills use
-span-level, inline annotation because skills are ambient (active
-during inference) and can nest. Both approaches produce trace
-metadata that the MLflow UI can display together.
-
-#### Trace queries
-
-`mlflow.search_skill_traces()` provides first-class keyword
-arguments for common skill trace lookups:
-
-```python
-traces = mlflow.search_skill_traces(
-    experiment_ids=[experiment_id],
-    skill_name="code-review",
-    skill_version=1,
-)
-```
-
-The function filters to traces with `SKILL` spans matching the
-given `mlflow.skill.*` attributes. The `filter_string` parameter
-can be combined with the keyword filters for additional
-constraints such as trace status or tags.
 
 ### Package manager integration
 
@@ -1084,9 +848,9 @@ package manager plugin:
    content in monolithic bundles), then calls the plugin's
    `install_bundle()` operation.
 
-MLflow owns registry and source resolution plus the trace manifest. The
-package manager owns all harness-specific behavior, including directory
-placement and any package-manager or harness manifest generation. Both
+MLflow owns registry and source resolution. The package manager owns
+all harness-specific behavior, including directory placement and any
+package-manager or harness manifest generation. Both
 installation commands increment the server-side install count for the
 installed skill or bundle version, and both accept a `--harness`
 argument (auto-detected from the local environment when omitted).
@@ -1099,8 +863,7 @@ command.
 
 `mlflow skills update` re-resolves installed references and reinstalls
 skills with newer versions available. `mlflow skills uninstall` and
-`mlflow skills bundles uninstall` remove installed skills or bundles
-and clean up manifest entries.
+`mlflow skills bundles uninstall` remove installed skills or bundles.
 
 **Why MLflow materializes locally.** MLflow resolves registry
 coordinates (versions, aliases, workspaces) and fetches content from the
@@ -1219,50 +982,14 @@ When `mlflow skills bundles install` is invoked:
    package manager plugin. The plugin handles harness-specific placement
    of the entire bundle and returns the actual harness-local name for
    each installed skill.
-4. MLflow writes `mlflow-skills-manifest.json` using the returned
-   harness-local names and the corresponding registry coordinates.
-5. If requested, MLflow updates the resolution lock with the exact
+4. If requested, MLflow updates the resolution lock with the exact
    bundle version and installation inputs.
 
 When `mlflow skills install` is invoked for a single skill, MLflow
 resolves the version, pulls its content to `.mlflow-skills/`,
-passes that path to the configured plugin's `install_skill()` operation,
-and writes the trace manifest using the harness-local name returned by
-the plugin after installation succeeds. If requested, it then updates
+passes that path to the configured plugin's `install_skill()` operation.
+If requested, it then updates
 the resolution lock with the exact skill version and installation inputs.
-
-#### Trace manifest
-
-Both installation commands write an `mlflow-skills-manifest.json` file
-that records installed registry coordinates. The Claude
-Code autologger consumes this manifest for automatic SKILL span
-creation:
-
-```json
-{
-  "manifest_version": "1.0",
-  "skills": {
-    "code-review": {
-      "name": "code-review",
-      "version": 1,
-      "workspace": "default"
-    },
-    "style-check": {
-      "name": "style-check",
-      "version": 1,
-      "workspace": "default"
-    }
-  }
-}
-```
-
-Project-scoped installs write the manifest at the project root.
-User-scoped installs write it in the MLflow user configuration
-directory. Project entries take precedence over user entries with the
-same harness-local skill name. See [implementation-details.md:
-Automatic trace
-instrumentation](implementation-details.md#automatic-trace-instrumentation)
-for discovery, matching, span lifecycle, and failure behavior.
 
 ### Implementation details
 
@@ -1291,11 +1018,6 @@ in [implementation-details.md](implementation-details.md).
   who do not install a package manager can still use `mlflow
   skills pull` for harness-agnostic content download.
 
-- **Automatic tracing coverage.** Automatic instrumentation is
-  implemented for Claude Code. Other harnesses can use manual
-  `skill_context()` instrumentation until their autologgers adopt the
-  manifest contract.
-
 # Alternatives
 
 ## Store skill artifacts only in MLflow (no source pointers)
@@ -1316,7 +1038,7 @@ management.
 
 This is sufficient for individual developers and small teams. This RFC
 proposes a governance layer on top of Git for enterprises that need
-status lifecycle, trace-to-skill linkage, and federated discovery.
+status lifecycle and federated discovery.
 The two approaches are complementary.
 
 ## Build custom harness adapters in MLflow
@@ -1339,8 +1061,7 @@ as the sole mechanism for skill management.
 
 These tools solve the client-side "make it portable and reproducible"
 problem well. However, they are not server-side registries and do not
-provide the governance and observability features that enterprises
-need:
+provide the governance features that enterprises need:
 
 - **Lifecycle management.** No concept of draft, active, deprecated,
   or deleted status. No way to signal consumers that a skill version
@@ -1348,15 +1069,12 @@ need:
 - **Rich discovery.** Limited search and metadata capabilities. No
   centralized catalog with tags, descriptions, and compatibility
   information.
-- **Trace integration.** No connection between installed skills and
-  runtime execution traces. No way to answer "which skill version
-  was active during this agent run?"
 - **RBAC and workspace scoping.** No per-user or per-team access
   controls. No visibility boundaries between teams or projects.
 
 The skill registry and package managers are complementary: the
-registry provides the server-side governance, discovery, and
-observability layer, while package managers handle client-side
+registry provides the server-side governance and discovery layer,
+while package managers handle client-side
 installation and harness-specific adaptation.
 
 # Adoption strategy
@@ -1364,15 +1082,15 @@ installation and harness-specific adaptation.
 New feature, not a breaking change. This RFC delivers Skill and
 SkillBundle entities, store, REST API, SDK, CLI, UI,
 `mlflow skills pull`, plugin import, package-manager-backed single-skill
-and bundle installation, the package manager plugin interface, the
-`mlflow-skills.lock` resolution lock, `mlflow.skill_context()` for
-manual trace integration, the install-time trace manifest, automatic
-SKILL spans in the Claude Code autologger, and
-`mlflow.search_skill_traces()` for querying traces by skill
-attributes.
+and bundle installation, the package manager plugin interface, and the
+`mlflow-skills.lock` resolution lock.
 
 #### Future improvements
 
+- **Trace integration.** Trace linking, including
+  `mlflow.skill_context()`, automatic SKILL span instrumentation via
+  an install-time trace manifest, and `search_skill_traces()`, is part
+  of the MVP scope and will be added to this RFC as a separate PR.
 - **Registry entries for non-skill bundle members.** Individual registry
   entries for non-skill content (e.g., subagents, MCP server references)
   are deferred to

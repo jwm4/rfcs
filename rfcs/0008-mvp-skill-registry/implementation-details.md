@@ -4,7 +4,7 @@ This document contains implementation-level specifications for
 RFC-0008 (Skill Registry). It covers database schema, entity
 dataclasses, store interface method signatures, REST API endpoints,
 pagination/filtering, SDK convenience functions, CLI mapping, package
-manager plugin interface, and trace integration details. These details
+manager plugin interface. These details
 support implementers; the main RFC covers the design rationale.
 
 ## Database schema
@@ -184,7 +184,7 @@ used by the Model Registry and RFC-0004:
   get/search/list/latest resolution. Active versions must first be
   unpublished or deprecated before they can be deleted.
 - The `deleted` status is terminal. Internal audit or provenance paths
-  may retain enough metadata to explain historical traces and bundle
+  may retain enough metadata to explain historical bundle
   snapshots, but deleted versions are not surfaced to consumers.
 
 ## Entity dataclasses
@@ -1158,44 +1158,10 @@ def list_package_managers() -> list[PackageManagerInfo]:
     harnesses. Discovers plugins via the entrypoint mechanism."""
 
 
-def search_skill_traces(
-    *,
-    experiment_ids: list[str] | None = None,
-    skill_name: str | None = None,
-    skill_version: int | None = None,
-    workspace: str | None = None,
-    filter_string: str | None = None,
-    max_results: int = 100,
-    order_by: list[str] | None = None,
-    page_token: str | None = None,
-) -> PagedList[Trace]:
-    """Search for traces containing SKILL spans matching the given
-    skill attributes. The skill_name, skill_version, and workspace
-    parameters provide exact-match filtering on the corresponding
-    mlflow.skill.* span attributes. Additional filters can be
-    combined via filter_string, which follows the standard MLflow
-    filter syntax and is AND-ed with the keyword filters."""
-
-
 # Example usage:
 version = mlflow.genai.register_skill(name="code-review", source_type="git", source="...")
 servers = mlflow.genai.search_skills(filter_string="status = 'active'")
-traces = mlflow.search_skill_traces(skill_name="code-review", skill_version=1)
 ```
-
-`search_skill_traces()` filters to traces containing `SKILL` spans
-with matching `mlflow.skill.name`, `mlflow.skill.version`, and
-`mlflow.skill.workspace` attributes, so callers do not need to know
-the span attribute naming convention. The `filter_string` parameter
-composes with the keyword filters for additional constraints (trace
-status, tags, etc.). Because skill identity is recorded as span attributes (not in a
-separate association table like MCP trace linking), implementing
-exact-match queries requires the store layer to support structured
-matching on span attribute values. The existing
-`span.attributes.*` filter path uses text search against
-serialized JSON content, which does not provide exact-match
-semantics. The implementation will need to enhance span attribute
-querying to support this.
 
 For SDK update methods, `NOT_SET` means "leave unchanged" while `None`
 means "clear this nullable field". This mirrors the store-layer update
@@ -1469,8 +1435,8 @@ provides the same operations from the command line:
 | `mlflow skills bundles install` | `install_bundle()` | Install a bundle through a package manager plugin; `--local-path` skips fetch |
 | `mlflow skills install --from-lock` | `install_from_lock()` | Replay exact registry versions from an MLflow resolution lock |
 | `mlflow skills update` | `update_installed_skills()` | Re-resolve installed references and reinstall skills with newer versions |
-| `mlflow skills uninstall` | `uninstall_skill()` | Uninstall a skill and remove its manifest entry |
-| `mlflow skills bundles uninstall` | `uninstall_bundle()` | Uninstall a bundle and remove its manifest entry |
+| `mlflow skills uninstall` | `uninstall_skill()` | Uninstall a skill |
+| `mlflow skills bundles uninstall` | `uninstall_bundle()` | Uninstall a bundle |
 | `mlflow skills bundles create` | `create_skill_bundle()` | Create a skill bundle |
 | `mlflow skills bundles create-version` | `create_skill_bundle_version()` | Create a bundle version with members |
 | `mlflow skills bundles get` | `get_skill_bundle()` | Get bundle metadata |
@@ -1564,8 +1530,7 @@ with the created bundle and skill versions in `PluginImportResult`.
 Import translates an existing plugin into MLflow's registry
 representation, creating registry entries for discovered skills while
 preserving the complete plugin source. It does not install the plugin,
-generate a downstream manifest, or translate an MLflow bundle into a
-downstream bundle format.
+translate an MLflow bundle into a downstream bundle format.
 
 ## MLflow resolution lock
 
@@ -1611,11 +1576,10 @@ These plugins receive resolved skills or bundle content
 install the content using an existing package manager. The package
 manager handles placement of all content, including non-skill files
 that do not have individual registry entries. It returns the actual
-harness-local name of every installed skill so MLflow can write an
-accurate trace manifest even when the package manager renames or prefixes
-skills. The result must contain exactly one `InstalledSkill` for every
-requested registry skill; missing or duplicate mappings fail the install
-before MLflow writes its trace manifest or resolution lock.
+harness-local name of every installed skill. The result must contain
+exactly one `InstalledSkill` for every requested registry skill;
+missing or duplicate mappings fail the install before MLflow writes
+its resolution lock.
 
 Both `mlflow skills install` and `mlflow skills
 bundles install` require a package manager plugin. The caller can select
@@ -1712,12 +1676,9 @@ When `mlflow skills bundles install` is invoked:
    bundle, `bundle_path` to the configured package manager plugin via
    `install_bundle()`. The plugin installs the complete monolithic bundle
    or the assembled skills and returns each skill's harness-local name.
-4. **Manifest:** MLflow writes `mlflow-skills-manifest.json`, keyed by
-   the returned harness-local names and populated with the corresponding
-   registry coordinates.
-5. **Resolution lock:** If `lock_file` was supplied, MLflow atomically
+4. **Resolution lock:** If `lock_file` was supplied, MLflow atomically
    updates it with the exact resolved bundle version and installation
-   inputs after the install and manifest write succeed.
+   inputs after the install succeeds.
 
 ### Single-skill installation flow
 
@@ -1735,12 +1696,9 @@ When `mlflow skills install` is invoked:
    naming, and any generated package-manager or harness metadata. An
    explicit harness selection from the caller is passed through to the
    plugin, which returns the actual harness-local skill name.
-4. **Manifest:** After the plugin reports success, MLflow writes or
-   updates `mlflow-skills-manifest.json` under the returned harness-local
-   name with the resolved registry coordinates.
-5. **Resolution lock:** If `lock_file` was supplied, MLflow atomically
+4. **Resolution lock:** If `lock_file` was supplied, MLflow atomically
    updates it with the exact resolved skill version and installation
-   inputs after the install and manifest write succeed.
+   inputs after the install succeeds.
 
 ## Pull semantics details
 
@@ -1768,82 +1726,6 @@ external sources is handled entirely by the client environment:
 The registry does not store, proxy, or manage source credentials.
 Pull failures due to authentication errors are surfaced to the caller
 with the underlying error from the source system.
-
-## skill_context() span attributes
-
-The `skill_context()` context manager creates a span with the
-following attributes:
-
-| Attribute | Value | Description |
-|---|---|---|
-| `mlflow.skill.name` | Skill name | Registry name of the active skill |
-| `mlflow.skill.version` | Version number | Registered version (integer) |
-| `mlflow.skill.workspace` | Workspace name | Resolved from the install manifest, falling back to the current tracking URI's workspace context |
-
-These three attributes form the `{workspace, name, version}`
-coordinates that link the span back to a specific skill version in
-the registry.
-
-## Automatic trace instrumentation
-
-Automatic instrumentation uses the install-time
-`mlflow-skills-manifest.json` to map harness-local skill invocations to
-registered skill coordinates. This RFC implements this behavior in the
-Claude Code autologger. The manifest format is harness-neutral so other
-harness integrations can adopt the same contract later.
-
-### Manifest writing and discovery
-
-Installation commands write or update the manifest after all requested
-skills have been installed successfully. Each entry is keyed by the
-harness-local skill name returned by the package manager plugin and
-contains the registered `workspace`, `name`, and resolved `version`.
-Aliases are resolved before the manifest is written and are not stored
-in place of versions.
-
-Project-scoped installation writes the manifest at the project root.
-User-scoped installation writes it in the MLflow user configuration
-directory. Project entries take precedence over user entries with the
-same harness-local skill name.
-
-For a monolithic bundle, installation writes an entry for every
-registered embedded skill resolved through its member URI `#subpath`
-fragment. For an
-assembled bundle, it writes an entry for every installed member skill.
-The bundle itself does not produce a SKILL span because tracing is at
-the invoked-skill level.
-
-### Claude Code invocation matching
-
-The Claude Code autologger matches harness skill invocations
-against manifest entries by skill name. When a match is found, it
-creates a span with:
-
-- span type `SKILL`
-- span name equal to the harness-local skill name
-- `mlflow.skill.name`, `mlflow.skill.version`, and
-  `mlflow.skill.workspace` attributes from the manifest
-
-LLM and tool spans produced while the skill is active become children
-of the SKILL span.
-
-If a matching SKILL span with the same registry coordinates is already
-active because application code used `mlflow.skill_context()`, the
-autologger reuses that active context and does not create a duplicate
-SKILL span.
-
-### Failure behavior
-
-Automatic instrumentation does not contact the registry during skill
-invocation and does not add runtime latency or create a dependency on
-registry availability.
-
-A missing manifest, malformed manifest, or unmatched skill name never
-interrupts the agent run or other autologging; it only prevents
-creation of a registry-linked SKILL span for the affected invocation.
-Skills copied into a harness without an MLflow installation command
-have no manifest entry and are not linked automatically; callers can
-still use `mlflow.skill_context()` manually.
 
 ## SDK and CLI code examples
 
