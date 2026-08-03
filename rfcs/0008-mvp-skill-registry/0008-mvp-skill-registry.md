@@ -856,6 +856,18 @@ SkillBundle entities, store, REST API, SDK, CLI, UI,
   entries for non-skill content (e.g., subagents, MCP server references)
   are deferred to
   [RFC-0009: Extended Skill Bundles](https://github.com/mlflow/rfcs/pull/27).
+- **Agent setup integration.** Add an option to
+  `uvx mlflow@latest agent setup` that teaches the agent how to query
+  the MLflow skills registry for capabilities, similar to
+  [Google ADK's skills registry integration](https://adk.dev/integrations/skills-registry/).
+- **MCP server for skill search.** Expose skill registry search
+  through the MLflow MCP server so that agents can discover skills
+  at runtime.
+- **Skill signatures and trusted publishers.** Support cryptographic
+  signatures on skill content (similar to
+  [NVIDIA's skill.oms.sig](https://github.com/NVIDIA/skills/blob/main/skills/cudaq-guide/skill.oms.sig))
+  to enable publisher verification and trusted-publisher filtering
+  in the registry UI.
 
 # Open questions
 
