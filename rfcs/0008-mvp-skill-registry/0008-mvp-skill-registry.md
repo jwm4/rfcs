@@ -435,15 +435,12 @@ decomposes into `member_name`, `member_version`, and
 A skill is a directory containing a SKILL.md entry point plus
 supporting files (scripts, templates, reference material). The
 `Skill` entity is the logical governed asset, scoped to a workspace.
-Key fields include `name` (unique within workspace), `display_name`,
+Key fields include `name` (unique within workspace), `description`,
 `status` (read-only, derived from the parent-resolved version),
 `latest_version` (read-only, highest active version number), and `aliases`.
 
-**UI fallback behavior**: `display_name` and `description` are stored
-on the parent entity. The API returns these fields exactly as stored;
-when unset, the response value is `null`. The UI may apply
-presentation-only fallback: for `display_name`, fall back to `name`.
-For version-level fields shown on parent cards (e.g., `source_type`),
+**UI fallback behavior**: for version-level fields shown on parent
+cards (e.g., `source_type`),
 the UI derives values from the latest-resolved
 version. Latest resolution prefers the highest version number among
 `active` versions; otherwise it falls back to the highest version
@@ -462,7 +459,7 @@ shared artifact (used with Git, OCI, and ZIP). The optional
 `content_digest` field enables integrity verification.
 
 `register_skill()` creates the parent Skill when needed (with null
-`display_name` and `description`) and otherwise reuses the existing
+`description`) and otherwise reuses the existing
 parent. To set parent-level metadata, use `create_skill()` before
 registering versions or `update_skill()` afterward. If the target
 `(name, version)` already exists, registration fails with an error.
@@ -739,11 +736,11 @@ alongside Experiments, Prompts, MCP Servers, and AI Gateway.
 #### List view
 
 The list view shows skills and bundles together using a card-based
-layout consistent with the MCP Server Registry (RFC-0004). Each card
+layout modeled on the MCP Server Registry (RFC-0004). Each card
 displays:
 
 - Entity type badge (skill or bundle)
-- Name and optional display name
+- Name
 - Description (truncated to 2-3 lines)
 - Latest version badge (e.g., "v1")
 - Status badge with color coding: draft (gray), active (green),
@@ -765,9 +762,9 @@ registration.
 
 The detail view for an individual skill shows:
 
-- **Metadata section**: name, display name, description, status,
+- **Metadata section**: name, description, status,
   workspace, source type, created by, created at, last updated
-- **Version table**: Version, Display name, Registered at, Status,
+- **Version table**: Version, Registered at, Status,
   Source type, Created by. Clicking a version row navigates to the
   version detail page showing source, subpath, content digest, and
   tags.

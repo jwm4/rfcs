@@ -17,7 +17,6 @@ workspace-scoped.
 |--------|------|-------|
 | `workspace` | `String(63)` | PK, default `'default'` |
 | `name` | `String(256)` | PK |
-| `display_name` | `String(256)` | mutable human-readable label; UI falls back to `name` when null |
 | `description` | `String(5000)` | |
 | `created_by` | `String(256)` | |
 | `last_updated_by` | `String(256)` | |
@@ -31,7 +30,6 @@ workspace-scoped.
 | `workspace` | `String(63)` | PK, FK |
 | `name` | `String(256)` | PK, FK |
 | `version` | `Integer` | PK, server-assigned monotonic integer |
-| `display_name` | `String(256)` | mutable human-readable label |
 | `source_type` | `String(20)` | nullable; `git`, `oci`, `zip`, `mlflow` |
 | `source` | `String(2048)` | nullable pointer to skill content |
 | `subpath` | `String(2048)` | nullable; path within the artifact |
@@ -88,7 +86,6 @@ status, version)` supports latest-resolution lookups.
 |--------|------|-------|
 | `workspace` | `String(63)` | PK, default `'default'` |
 | `name` | `String(256)` | PK |
-| `display_name` | `String(256)` | mutable human-readable label; UI falls back to `name` when null |
 | `description` | `String(5000)` | |
 | `created_by` | `String(256)` | |
 | `last_updated_by` | `String(256)` | |
@@ -102,7 +99,6 @@ status, version)` supports latest-resolution lookups.
 | `workspace` | `String(63)` | PK, FK |
 | `name` | `String(256)` | PK, FK |
 | `version` | `Integer` | PK, server-assigned monotonic integer |
-| `display_name` | `String(256)` | mutable human-readable label |
 | `source_type` | `String(20)` | optional; `git`, `oci`, `zip`, `mlflow` |
 | `source` | `String(2048)` | optional pointer to bundle artifact |
 | `subpath` | `String(2048)` | nullable; path within the artifact |
@@ -203,7 +199,6 @@ class SkillStatus(StrEnum):
 @dataclass
 class Skill:
     name: str
-    display_name: str | None = None
     description: str | None = None
     workspace: str | None = None
     status: SkillStatus | None = None  # read-only, derived from parent-resolved version
@@ -219,7 +214,7 @@ class Skill:
 | Field | Type | Description |
 |---|---|---|
 | `name` | `str` | Stable logical asset name, unique within a workspace |
-| `display_name` | `str` | Mutable human-readable label for UI display. When null, the UI falls back to `name` |
+| `description` | `str` | Optional human-readable description of the skill |
 | `status` | `SkillStatus` | Read-only; derived from the parent-resolved version: highest active version number if present, otherwise highest non-deleted non-active version number |
 | `aliases` | `dict[str, int]` | Stable version pointers (e.g., `{"production": 2}`); read-only, populated from `skill_aliases` table |
 | `latest_version` | `int` | Read-only; highest version number among `active` versions if one exists, otherwise highest non-`deleted` non-`active` version |
@@ -239,7 +234,6 @@ class SkillSourceType(StrEnum):
 class SkillVersion:
     name: str
     version: int
-    display_name: str | None = None
     source_type: SkillSourceType | None = None
     source: str | None = None
     subpath: str | None = None
@@ -248,7 +242,6 @@ class SkillVersion:
     tags: dict[str, str] = field(default_factory=dict)
     aliases: list[str] = field(default_factory=list)
     workspace: str | None = None
-
     created_by: str | None = None
     last_updated_by: str | None = None
     creation_timestamp: int | None = None
@@ -258,7 +251,6 @@ class SkillVersion:
 | Field | Type | Description |
 |---|---|---|
 | `version` | `int` | Server-assigned monotonic integer. Each new version receives the next integer |
-| `display_name` | `str` | Mutable human-readable label for UI display. When null, the UI falls back to `name` |
 | `source_type` | `SkillSourceType` | Optional distribution mechanism: `git`, `oci`, `zip`, `mlflow` |
 | `source` | `str` | Pointer to the content in the source system. Required for standalone pull. May be omitted only when the version's content lives within a bundle-level artifact, in which case the containing bundle membership identifies the embedded content path |
 | `subpath` | `str` | Optional path within the artifact where this skill's content lives. See subpath usage table below |
@@ -374,7 +366,7 @@ is the consumer's responsibility.
 **Immutability contract.** `source_type`, `source`, `subpath`,
 `content_digest`, and `version` are immutable after creation. To point
 to different content, register a new version. Mutable fields
-(`display_name`, `status`, `tags`) can be updated independently.
+(`status`, `tags`) can be updated independently.
 
 ### SkillBundle entity
 
@@ -386,7 +378,6 @@ top-level pattern as Skill: versions, tags, and aliases.
 @dataclass
 class SkillBundle:
     name: str
-    display_name: str | None = None
     description: str | None = None
     workspace: str | None = None
     status: SkillStatus | None = None  # read-only, derived from parent-resolved version
@@ -423,7 +414,6 @@ convention:
 class SkillBundleVersion:
     name: str
     version: int
-    display_name: str | None = None
     source_type: SkillSourceType | None = None
     source: str | None = None
     subpath: str | None = None
@@ -433,7 +423,6 @@ class SkillBundleVersion:
     skills: list[str] = field(default_factory=list)
     aliases: list[str] = field(default_factory=list)
     workspace: str | None = None
-
     created_by: str | None = None
     last_updated_by: str | None = None
     creation_timestamp: int | None = None
@@ -470,7 +459,7 @@ of a monolithic bundle when the URI lacks a `#subpath` fragment.
 **Immutability contract.** The member list and source fields of a
 bundle version are immutable after creation. To change the set of
 members or source pointer, register a new bundle version. Mutable
-fields (`display_name`, `status`, `tags`) can be updated independently.
+fields (`status`, `tags`) can be updated independently.
 
 Correctness of the artifact layout is the publisher's responsibility;
 the registry does not validate artifact contents at registration time.
@@ -528,7 +517,6 @@ class SkillRegistryMixin:
 
     def create_skill(
         self, name: str,
-        display_name: str | None = None,
         description: str | None = None,
     ) -> Skill:
         raise NotImplementedError(self.__class__.__name__)
@@ -548,7 +536,6 @@ class SkillRegistryMixin:
     def update_skill(
         self,
         name: str,
-        display_name: str | None = NOT_SET,
         description: str | None = NOT_SET,
     ) -> Skill:
         raise NotImplementedError(self.__class__.__name__)
@@ -561,7 +548,6 @@ class SkillRegistryMixin:
     def create_skill_version(
         self,
         name: str,
-        display_name: str | None = None,
         source_type: str | None = None,
         source: str | None = None,
         subpath: str | None = None,
@@ -597,7 +583,6 @@ class SkillRegistryMixin:
         self,
         name: str,
         version: int,
-        display_name: str | None = NOT_SET,
         status: SkillStatus | None = NOT_SET,
     ) -> SkillVersion:
         raise NotImplementedError(self.__class__.__name__)
@@ -644,7 +629,6 @@ class SkillRegistryMixin:
 
     def create_skill_bundle(
         self, name: str,
-        display_name: str | None = None,
         description: str | None = None,
     ) -> SkillBundle:
         raise NotImplementedError(self.__class__.__name__)
@@ -664,7 +648,6 @@ class SkillRegistryMixin:
     def update_skill_bundle(
         self,
         name: str,
-        display_name: str | None = NOT_SET,
         description: str | None = NOT_SET,
     ) -> SkillBundle:
         raise NotImplementedError(self.__class__.__name__)
@@ -677,7 +660,6 @@ class SkillRegistryMixin:
     def create_skill_bundle_version(
         self,
         name: str,
-        display_name: str | None = None,
         skills: list[str] | None = None,
         source_type: str | None = None,
         source: str | None = None,
@@ -715,7 +697,6 @@ class SkillRegistryMixin:
         self,
         name: str,
         version: int,
-        display_name: str | None = NOT_SET,
         status: SkillStatus | None = NOT_SET,
     ) -> SkillBundleVersion:
         raise NotImplementedError(self.__class__.__name__)
@@ -786,7 +767,6 @@ import mlflow
 def register_skill(
     *,
     name: str | None = None,
-    display_name: str | None = None,
     source_type: str | None = None,
     source: str | None = None,
     subpath: str | None = None,
@@ -796,7 +776,7 @@ def register_skill(
 ) -> SkillVersion:
     """Register a skill version. The server assigns the next
     monotonic integer version. Auto-creates the parent Skill if
-    it does not exist (with null display_name and description) and
+    it does not exist (with null description) and
     otherwise reuses the existing parent. To set parent-level
     metadata, use create_skill() before registering versions or
     update_skill() afterward. This matches the MCP Server Registry
@@ -817,7 +797,6 @@ def register_skill(
 def create_skill(
     *,
     name: str,
-    display_name: str | None = None,
     description: str | None = None,
 ) -> Skill: ...
 
@@ -837,7 +816,6 @@ def search_skills(
 def update_skill(
     *,
     name: str,
-    display_name: str | None = NOT_SET,
     description: str | None = NOT_SET,
 ) -> Skill: ...
 
@@ -848,7 +826,6 @@ def delete_skill(*, name: str) -> None: ...
 def create_skill_version(
     *,
     name: str,
-    display_name: str | None = None,
     source_type: str | None = None,
     source: str | None = None,
     subpath: str | None = None,
@@ -879,7 +856,6 @@ def update_skill_version(
     *,
     name: str,
     version: int,
-    display_name: str | None = NOT_SET,
     status: str | None = NOT_SET,
 ) -> SkillVersion: ...
 
@@ -890,7 +866,6 @@ def delete_skill_version(*, name: str, version: int) -> None: ...
 def create_skill_bundle(
     *,
     name: str,
-    display_name: str | None = None,
     description: str | None = None,
 ) -> SkillBundle: ...
 
@@ -898,7 +873,6 @@ def create_skill_bundle(
 def create_skill_bundle_version(
     *,
     name: str,
-    display_name: str | None = None,
     skills: list[str] | None = None,
     source_type: str | None = None,
     source: str | None = None,
@@ -922,7 +896,6 @@ def search_skill_bundles(
 def update_skill_bundle(
     *,
     name: str,
-    display_name: str | None = NOT_SET,
     description: str | None = NOT_SET,
 ) -> SkillBundle: ...
 
@@ -957,7 +930,6 @@ def update_skill_bundle_version(
     *,
     name: str,
     version: int,
-    display_name: str | None = NOT_SET,
     status: str | None = NOT_SET,
 ) -> SkillBundleVersion: ...
 
@@ -1177,18 +1149,15 @@ from pydantic import BaseModel, Field
 
 class CreateSkillRequest(BaseModel):
     name: str
-    display_name: str | None = None
     description: str | None = None
 
 
 class UpdateSkillRequest(BaseModel):
-    display_name: str | None = None
     description: str | None = None
 
 
 class CreateSkillVersionRequest(BaseModel):
     name: str | None = None  # optional for POST /register (inferred from source when omitted); ignored for POST /{name}/versions (name from path)
-    display_name: str | None = None
     source_type: str | None = None
     source: str | None = None
     subpath: str | None = None
@@ -1197,23 +1166,19 @@ class CreateSkillVersionRequest(BaseModel):
 
 
 class UpdateSkillVersionRequest(BaseModel):
-    display_name: str | None = None
     status: str | None = None
 
 
 class CreateSkillBundleRequest(BaseModel):
     name: str
-    display_name: str | None = None
     description: str | None = None
 
 
 class UpdateSkillBundleRequest(BaseModel):
-    display_name: str | None = None
     description: str | None = None
 
 
 class CreateSkillBundleVersionRequest(BaseModel):
-    display_name: str | None = None
     skills: list[str] | None = None
     source_type: str | None = None
     source: str | None = None
@@ -1222,7 +1187,6 @@ class CreateSkillBundleVersionRequest(BaseModel):
 
 
 class UpdateSkillBundleVersionRequest(BaseModel):
-    display_name: str | None = None
     status: str | None = None
 
 
@@ -1244,7 +1208,6 @@ class SetTagRequest(BaseModel):
 class SkillVersionResponse(BaseModel):
     name: str
     version: int
-    display_name: str | None = None
     source_type: str | None = None
     source: str | None = None
     subpath: str | None = None
@@ -1261,7 +1224,6 @@ class SkillVersionResponse(BaseModel):
 
 class SkillResponse(BaseModel):
     name: str
-    display_name: str | None = None
     description: str | None = None
     status: str | None = None
     latest_version: int | None = None
@@ -1276,7 +1238,6 @@ class SkillResponse(BaseModel):
 class SkillBundleVersionResponse(BaseModel):
     name: str
     version: int
-    display_name: str | None = None
     source_type: str | None = None
     source: str | None = None
     subpath: str | None = None
@@ -1294,7 +1255,6 @@ class SkillBundleVersionResponse(BaseModel):
 
 class SkillBundleResponse(BaseModel):
     name: str
-    display_name: str | None = None
     description: str | None = None
     status: str | None = None
     latest_version: int | None = None
