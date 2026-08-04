@@ -88,10 +88,9 @@ mlflow.genai.register_skill(
     subpath="code-review",
 )
 
-# Explicit: all fields specified
+# With explicit subpath
 mlflow.genai.register_skill(
     name="code-review",
-    source_type="git",
     source="https://github.com/acme/agent-skills.git@v1.0.0",
     subpath="code-review",
 )
@@ -184,7 +183,6 @@ infrastructure; registry-specific trace linkage (SKILL spans,
 
    mlflow.genai.register_skill(
        name="code-review",
-       source_type="git",
        source="https://github.com/acme/agent-skills.git@v1.0.0",
        subpath="code-review",
    )
@@ -455,8 +453,7 @@ A versioned record containing a typed source pointer (`git`, `oci`,
 unique within a workspace. Source pointers and version numbers are
 immutable after creation; to point to different content, register a
 new version. The optional `subpath` field identifies content within a
-shared artifact (used with Git, OCI, and ZIP). The optional
-`content_digest` field enables integrity verification.
+shared artifact (used with Git, OCI, and ZIP).
 
 `register_skill()` creates the parent Skill when needed (with null
 `description`) and otherwise reuses the existing
@@ -689,11 +686,6 @@ subdirectory of the destination, named by the member's name. If a
 skill member in an assembled bundle has no `source`, the pull fails
 rather than producing a partial local bundle.
 
-If `content_digest` is set, `pull` verifies the fetched content
-matches the digest and returns an error on mismatch. This
-verification is client-side. The server stores the digest as metadata
-but does not re-verify artifact store contents on each request.
-
 `pull` is harness-agnostic. It downloads content but does not generate
 harness-specific manifests or place files in harness-specific
 directories.
@@ -766,8 +758,7 @@ The detail view for an individual skill shows:
   workspace, source type, created by, created at, last updated
 - **Version table**: Version, Registered at, Status,
   Source type, Created by. Clicking a version row navigates to the
-  version detail page showing source, subpath, content digest, and
-  tags.
+  version detail page showing source, subpath, and status.
 - **Aliases**: alias name to version mapping (e.g.,
   `production -> 1`)
 - **Tags**: key-value list with edit controls
@@ -795,9 +786,8 @@ in [implementation-details.md](implementation-details.md).
 ## Drawbacks
 
 - **Source pointer validity.** For external sources (git, oci, zip),
-  the registry cannot guarantee pointers remain valid. The optional
-  `content_digest` field mitigates content tampering but does not
-  prevent link rot. Users who need self-contained storage can use
+  the registry cannot guarantee pointers remain valid. Users who
+  need self-contained storage can use
   `source_type="mlflow"` to store content directly in MLflow artifact
   storage.
 
@@ -806,7 +796,6 @@ in [implementation-details.md](implementation-details.md).
   best-effort cleanup when version creation fails, but an artifact
   backend without deletion support can retain unreferenced uploaded
   files until garbage collection.
-
 
 # Alternatives
 
@@ -830,7 +819,6 @@ This is sufficient for individual developers and small teams. This RFC
 proposes a governance layer on top of Git for enterprises that need
 status lifecycle and federated discovery.
 The two approaches are complementary.
-
 
 # Adoption strategy
 

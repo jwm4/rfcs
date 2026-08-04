@@ -33,7 +33,6 @@ workspace-scoped.
 | `source_type` | `String(20)` | nullable; `git`, `oci`, `zip`, `mlflow` |
 | `source` | `String(2048)` | nullable pointer to skill content |
 | `subpath` | `String(2048)` | nullable; path within the artifact |
-| `content_digest` | `String(512)` | optional integrity digest |
 | `status` | `String(20)` | default `'draft'` |
 | `created_by` | `String(256)` | |
 | `last_updated_by` | `String(256)` | |
@@ -102,7 +101,6 @@ status, version)` supports latest-resolution lookups.
 | `source_type` | `String(20)` | optional; `git`, `oci`, `zip`, `mlflow` |
 | `source` | `String(2048)` | optional pointer to bundle artifact |
 | `subpath` | `String(2048)` | nullable; path within the artifact |
-| `content_digest` | `String(512)` | optional integrity digest |
 | `status` | `String(20)` | default `'draft'` |
 | `created_by` | `String(256)` | |
 | `last_updated_by` | `String(256)` | |
@@ -238,7 +236,7 @@ class SkillVersion:
     source: str | None = None
     subpath: str | None = None
     status: SkillStatus = SkillStatus.DRAFT
-    content_digest: str | None = None
+
     tags: dict[str, str] = field(default_factory=dict)
     aliases: list[str] = field(default_factory=list)
     workspace: str | None = None
@@ -251,10 +249,9 @@ class SkillVersion:
 | Field | Type | Description |
 |---|---|---|
 | `version` | `int` | Server-assigned monotonic integer. Each new version receives the next integer |
-| `source_type` | `SkillSourceType` | Optional distribution mechanism: `git`, `oci`, `zip`, `mlflow` |
+| `source_type` | `SkillSourceType` | Server-inferred distribution mechanism: `git`, `oci`, `zip`, `mlflow`. Inferred from the `source` URL scheme |
 | `source` | `str` | Pointer to the content in the source system. Required for standalone pull. May be omitted only when the version's content lives within a bundle-level artifact, in which case the containing bundle membership identifies the embedded content path |
 | `subpath` | `str` | Optional path within the artifact where this skill's content lives. See subpath usage table below |
-| `content_digest` | `str` | Optional digest for integrity verification (e.g., `sha256:abc123...`). Aligns with OCI digest terminology |
 | `status` | `SkillStatus` | Per-version lifecycle: `draft`, `active`, `deprecated`, `deleted` |
 | `aliases` | `list[str]` | Alias names currently pointing at this version (read-only, projected from alias table) |
 
@@ -279,7 +276,7 @@ asset lives." Its applicability varies by source type:
 | `oci` | Path within the OCI image (e.g., `plugins/code-review`). Used when multiple skills share a single image. |
 | `zip` | Path within the archive (e.g., `plugins/code-review`). Used when multiple skills share a single archive. |
 | `git` | Path within the repository (e.g., `code-review`). Used when the skill content is not at the repository root. The `source` field contains the clone URL with `@<ref>` suffix; `subpath` locates the content within the repo. |
-| `mlflow` | Not used. The artifact path is scoped to the specific skill version at upload time. |
+| `mlflow` | Not used. The artifact path is derived from the skill name and version. |
 
 **Git source format.** For `source_type="git"`, `source` is a Git
 clone URL with an `@<ref>` suffix to identify the branch, tag, or
@@ -288,8 +285,7 @@ The `subpath` field identifies the path within the repository where
 the skill content lives (e.g., `code-review`). This separates the
 clone target, the ref, and the content path into distinct fields
 rather than relying on hosting-provider-specific tree URL conventions.
-Mutable refs (branches, tags) are allowed; `content_digest` can be
-used to detect content drift when the ref changes.
+Mutable refs (branches, tags) are allowed.
 
 **MLflow artifact storage (`source_type="mlflow"`).** In addition to
 external source pointers, the registry supports storing skill content
@@ -298,73 +294,41 @@ have external Git/OCI infrastructure, who want agent capabilities
 stored alongside their models, or who operate in airgapped
 environments where external sources are not reachable.
 
-Content is stored as a directory tree of individual files under an
-artifact path, consistent with how MLflow stores model artifacts. For
-example, a skill with a SKILL.md, scripts, and reference material is
-stored as separate artifacts under a version-specific prefix:
+Content is stored as a directory tree of individual files under a
+controlled artifact path derived from the skill name and version
+(e.g., `skills/<name>/<version>/`), consistent with how MLflow stores
+model artifacts. The `source` field is null for MLflow-stored content;
+the system knows where to find it by convention. Pull downloads the
+directory tree from the artifact store. The MLflow UI can browse
+individual files within a stored skill version when artifact proxying
+is enabled.
 
-```
-skills/code-review/1/
-  SKILL.md
-  scripts/analyze.sh
-  scripts/lint-config.json
-  reference/style-guide.md
-```
-
-The `source` field contains the artifact URI resolved by MLflow's
-artifact storage (for example,
-`mlflow-artifacts:/skills/code-review/1/sha256-abc123/` when using
-the artifact proxy, or a direct artifact-store URI otherwise).
-`source_type="mlflow"` means "stored in MLflow-managed artifact
-storage," not a specific URI scheme. Pull downloads the directory tree
-from the artifact store. The MLflow UI can browse individual files
-within a stored skill version when artifact proxying is enabled.
-
-**Client-side upload flow.** Direct artifact storage is implemented by
-the `register_skill(content_path=...)` SDK/CLI convenience path rather
-than a new skill-registry upload endpoint:
+**Client-side upload flow.** When `source` is a local path (detected
+by the absence of a `://` scheme), the SDK uploads the content to
+MLflow artifact storage rather than treating it as a remote pointer:
 
 1. The client validates the local directory and preflights that the
    path can be registered.
-2. The client computes `content_digest` over a canonical representation
-   of the directory. Regular files are ordered by normalized relative
-   path; both paths and file contents participate in the digest.
-   Symlinks are rejected, and empty directories are not preserved.
-3. The client checks that the target skill name can accept a new
-   version.
-4. The client uploads each file through MLflow's existing artifact APIs
-   to a digest-qualified, version-specific artifact prefix.
-5. After upload succeeds, the client creates the `SkillVersion` with
-   `source_type="mlflow"`, the resolved artifact URI, and the computed
-   digest.
+2. The client creates the `SkillVersion` with `source` set to null.
+   The server assigns the version number and infers
+   `source_type="mlflow"` from the null source.
+3. Using the returned version number, the client uploads each file
+   through MLflow's existing artifact APIs to the controlled artifact
+   prefix (`skills/<name>/<version>/`).
 
-The upload and registry write are not atomic. If version creation fails,
-the client makes a best-effort attempt to delete the uploaded prefix when
-the artifact backend supports deletion. Any remaining files are
-unreferenced orphaned artifacts and may be removed by artifact-store
-garbage collection. A concurrent writer can still win after preflight;
-the losing client follows the same cleanup behavior.
+Version creation and upload are not atomic. If upload fails after the
+version record is created, the version exists with no content. The
+client makes a best-effort attempt to delete the version record and
+any partially uploaded files. A backend without deletion support can
+retain unreferenced uploaded files until garbage collection.
 
 **Version uniqueness.** The combination of `(name, version)` is unique
 within a workspace. A skill version represents a single logical
-version of a capability; `source_type` and `source` describe where to
-find it but are not part of its identity.
-
-**Content integrity.** The optional `content_digest` field stores a
-digest of the skill content at registration time (e.g.,
-`sha256:abc123...`). For `source_type="mlflow"`, the client computes
-the digest before upload and stores it on the version; on pull, the
-client recomputes the digest over the downloaded content and rejects
-the result if it does not match, detecting out-of-band modification
-of the underlying artifact store. For external source types (git, oci,
-zip), `content_digest` is also client-supplied: for OCI sources, this is
-the native image digest; for Git sources, a digest of the file contents
-at the pinned commit; for ZIP sources, a digest of the archive. The
-registry stores the digest but does not verify it on read; verification
-is the consumer's responsibility.
+version of a capability; `source` describes where to find it but is
+not part of its identity.
 
 **Immutability contract.** `source_type`, `source`, `subpath`,
-`content_digest`, and `version` are immutable after creation. To point
+and `version` are immutable after creation. To point
 to different content, register a new version. Mutable fields
 (`status`, `tags`) can be updated independently.
 
@@ -417,7 +381,7 @@ class SkillBundleVersion:
     source_type: SkillSourceType | None = None
     source: str | None = None
     subpath: str | None = None
-    content_digest: str | None = None
+
     status: SkillStatus = SkillStatus.DRAFT
     tags: dict[str, str] = field(default_factory=dict)
     skills: list[str] = field(default_factory=list)
@@ -437,8 +401,8 @@ within a workspace.
 **Bundle-level source.** A bundle version is either monolithic or
 assembled, never both:
 
-- **Monolithic:** has its own `source_type`, `source`, `subpath`,
-  and `content_digest`, pointing to a single artifact (e.g., an OCI
+- **Monolithic:** has its own `source_type`, `source`, and `subpath`,
+  pointing to a single artifact (e.g., an OCI
   image or Git repo) that contains the complete bundle. `pull`
   fetches the bundle artifact as a unit. Member skill versions may
   omit their own `source` because the bundle artifact is the
@@ -551,7 +515,6 @@ class SkillRegistryMixin:
         source_type: str | None = None,
         source: str | None = None,
         subpath: str | None = None,
-        content_digest: str | None = None,
         status: str = "draft",
     ) -> SkillVersion:
         raise NotImplementedError(self.__class__.__name__)
@@ -664,7 +627,6 @@ class SkillRegistryMixin:
         source_type: str | None = None,
         source: str | None = None,
         subpath: str | None = None,
-        content_digest: str | None = None,
     ) -> SkillBundleVersion:
         raise NotImplementedError(self.__class__.__name__)
 
@@ -767,12 +729,9 @@ import mlflow
 def register_skill(
     *,
     name: str | None = None,
-    source_type: str | None = None,
     source: str | None = None,
     subpath: str | None = None,
     status: str = "draft",
-    content_path: str | None = None,
-    content_digest: str | None = None,
 ) -> SkillVersion:
     """Register a skill version. The server assigns the next
     monotonic integer version. Auto-creates the parent Skill if
@@ -780,18 +739,13 @@ def register_skill(
     otherwise reuses the existing parent. To set parent-level
     metadata, use create_skill() before registering versions or
     update_skill() afterward. This matches the MCP Server Registry
-    behavior (register_mcp_server). If name is omitted and source
-    is provided, the server fetches the source and extracts the
-    name from the skill's SKILL.md entry point. If name is omitted
-    and content_path is provided, the client extracts the name from
-    the local SKILL.md before uploading. If source_type is omitted
-    but source is provided, the server infers the type from the URL
-    (.git suffix or git:// = git, oci:// = oci, .zip = zip); if
-    inference fails, an error asks the caller to specify source_type
-    explicitly. If content_path is provided, the client uploads the
-    files through existing MLflow artifact APIs and sets source_type,
-    source, and content_digest. content_path is mutually exclusive
-    with source_type, source, subpath, and content_digest."""
+    behavior (register_mcp_server). If name is omitted, the name
+    is extracted from the skill's SKILL.md entry point (server-side
+    for remote sources, client-side for local paths). The server
+    infers source_type from the source URL (.git suffix or git://
+    = git, oci:// = oci, .zip = zip). If source is a local path
+    (no :// scheme), the client uploads the files through existing
+    MLflow artifact APIs."""
 
 
 def create_skill(
@@ -826,10 +780,8 @@ def delete_skill(*, name: str) -> None: ...
 def create_skill_version(
     *,
     name: str,
-    source_type: str | None = None,
     source: str | None = None,
     subpath: str | None = None,
-    content_digest: str | None = None,
 ) -> SkillVersion: ...
 
 
@@ -874,10 +826,8 @@ def create_skill_bundle_version(
     *,
     name: str,
     skills: list[str] | None = None,
-    source_type: str | None = None,
     source: str | None = None,
     subpath: str | None = None,
-    content_digest: str | None = None,
 ) -> SkillBundleVersion: ...
 
 
@@ -992,7 +942,6 @@ class PluginImportResult:
 def introspect_bundle(
     *,
     source: str,
-    source_type: str | None = None,
     subpath: str | None = None,
 ) -> PluginIntrospectionResult:
     """Inspect a local or remote plugin without modifying the registry."""
@@ -1002,7 +951,6 @@ def import_bundle(
     *,
     source: str,
     bundle_name: str | None = None,
-    source_type: str | None = None,
     subpath: str | None = None,
 ) -> PluginImportResult:
     """Import a plugin as a monolithic bundle.
@@ -1012,8 +960,7 @@ def import_bundle(
     bundle version, and returns warnings for non-skill content that is
     included in the bundle but does not receive individual registry
     entries. If bundle_name is omitted, it is inferred from the source
-    directory name. If source_type is omitted, it is inferred from the
-    URL scheme.
+    directory name. The server infers source_type from the URL scheme.
     """
 
 
@@ -1031,7 +978,7 @@ def pull(
 
 
 # Example usage:
-version = mlflow.genai.register_skill(name="code-review", source_type="git", source="...")
+version = mlflow.genai.register_skill(name="code-review", source="https://github.com/acme/skills.git@v1.0.0")
 servers = mlflow.genai.search_skills(filter_string="status = 'active'")
 ```
 
@@ -1057,16 +1004,22 @@ variants, following the MCP Server Registry (RFC-0004) pattern.
 content when possible, so the simplest call requires only what cannot
 be derived. When `name` is omitted from a registration request, the
 server fetches the source and extracts the name from the skill's
-SKILL.md entry point. When `source_type` is omitted but `source` is
-provided, the server infers the type from the URL scheme. This keeps
+SKILL.md entry point. The server always infers `source_type` from the
+`source` value: `.git` suffix or `git://` scheme = git, `oci://` = oci,
+`.zip` = zip, and null `source` = mlflow (content stored in MLflow
+artifact storage). The one exception is embedded skills created during
+bundle import, where the importer sets `source_type`, `source`, and
+`subpath` all to null because the content lives inside the bundle
+artifact rather than in standalone storage. `source_type` is not a
+user-facing parameter. This keeps
 SDKs as thin REST wrappers, avoids reimplementing inference in every
 language, and prepares for future server-side content inspection
 (e.g., signature verification).
 
-There is no skill-registry content-upload endpoint. The client-side
-`register_skill(content_path=...)` helper uploads through existing
-MLflow artifact APIs, then uses the version-creation endpoint below to
-store the resulting artifact URI and digest.
+There is no skill-registry content-upload endpoint. When `source` is
+a local path, the client creates a version record with null source to
+obtain the server-assigned version number, then uploads through
+existing MLflow artifact APIs to the controlled path.
 
 ### Skill endpoints
 
@@ -1080,7 +1033,7 @@ All paths relative to the logical skills router prefix.
 | `GET` | `/{name}` | Get skill by name |
 | `PATCH` | `/{name}` | Update skill fields |
 | `DELETE` | `/{name}` | Hard-delete skill (cascades, subject to references) |
-| `POST` | `/{name}/versions` | Create a skill version (name from path, no inference) |
+| `POST` | `/{name}/versions` | Create a skill version (name from path, no name inference; source_type is still server-inferred) |
 | `GET` | `/{name}/versions` | Search versions |
 | `GET` | `/{name}/versions/{version}` | Get a specific version |
 | `PATCH` | `/{name}/versions/{version}` | Update version |
@@ -1158,10 +1111,8 @@ class UpdateSkillRequest(BaseModel):
 
 class CreateSkillVersionRequest(BaseModel):
     name: str | None = None  # optional for POST /register (inferred from source when omitted); ignored for POST /{name}/versions (name from path)
-    source_type: str | None = None
     source: str | None = None
     subpath: str | None = None
-    content_digest: str | None = None
     status: str = "draft"
 
 
@@ -1180,10 +1131,8 @@ class UpdateSkillBundleRequest(BaseModel):
 
 class CreateSkillBundleVersionRequest(BaseModel):
     skills: list[str] | None = None
-    source_type: str | None = None
     source: str | None = None
     subpath: str | None = None
-    content_digest: str | None = None
 
 
 class UpdateSkillBundleVersionRequest(BaseModel):
@@ -1211,11 +1160,9 @@ class SkillVersionResponse(BaseModel):
     source_type: str | None = None
     source: str | None = None
     subpath: str | None = None
-    content_digest: str | None = None
     status: str = "draft"
     aliases: list[str] = Field(default_factory=list)
     tags: dict[str, str] = Field(default_factory=dict)
-
     created_by: str | None = None
     last_updated_by: str | None = None
     creation_timestamp: int | None = None
@@ -1241,12 +1188,10 @@ class SkillBundleVersionResponse(BaseModel):
     source_type: str | None = None
     source: str | None = None
     subpath: str | None = None
-    content_digest: str | None = None
     status: str = "draft"
     skills: list[str] = Field(default_factory=list)
     aliases: list[str] = Field(default_factory=list)
     tags: dict[str, str] = Field(default_factory=dict)
-
     created_by: str | None = None
     last_updated_by: str | None = None
     creation_timestamp: int | None = None
@@ -1322,9 +1267,8 @@ discovery used by import but do not create or modify registry records.
 They accept either a local path or a remote Git, OCI, ZIP, or MLflow
 artifact source and return the discovered skill names and paths,
 available plugin name metadata, and warnings for unregistered
-non-skill content. A local path must not specify `source_type`;
-remote sources use an explicit source type or the same unambiguous
-syntax inference as import.
+non-skill content. The server infers `source_type` from the source
+value using the same rules as registration.
 
 ### Supported input format
 
@@ -1345,8 +1289,8 @@ by Claude Code and other harnesses. The importer:
 
 The resulting bundle name must be available after explicit
 arguments and plugin metadata are considered. The version is
-server-assigned. When `source_type` is omitted, the client infers
-it from the source syntax and fails if the source type is ambiguous.
+server-assigned. The server infers `source_type` from the source
+value using the same rules as registration.
 
 ### Registration behavior
 
@@ -1419,15 +1363,13 @@ import mlflow
 
 mlflow.genai.register_skill(
     name="code-review",
-    source_type="oci",
-    source="ghcr.io/acme/agent-plugin:v1.0.0",
+    source="oci://ghcr.io/acme/agent-plugin:v1.0.0",
     subpath="skills/code-review",
 )
 
 mlflow.genai.register_skill(
     name="test-coverage",
-    source_type="oci",
-    source="ghcr.io/acme/agent-plugin:v1.0.0",
+    source="oci://ghcr.io/acme/agent-plugin:v1.0.0",
     subpath="skills/test-coverage",
 )
 
@@ -1448,8 +1390,7 @@ mlflow.genai.register_skill(
 
 bundle_version = mlflow.genai.create_skill_bundle_version(
     name="pr-workflow-mono",
-    source_type="oci",
-    source="ghcr.io/acme/agent-plugin:v1.0.0",
+    source="oci://ghcr.io/acme/agent-plugin:v1.0.0",
     skills=[
         "skills:/embedded-review/1#skills/embedded-review",
     ],
