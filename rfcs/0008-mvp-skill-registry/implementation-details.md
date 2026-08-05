@@ -1018,7 +1018,10 @@ variants, following the MCP Server Registry (RFC-0004) pattern.
 content when possible, so the simplest call requires only what cannot
 be derived. When `name` is omitted from a registration request, the
 server fetches the source and extracts the name from the skill's
-SKILL.md entry point. The server always infers `source_type` from the
+SKILL.md entry point. If the server cannot access the source (e.g.,
+private repositories requiring client-side credentials), registration
+fails with an error indicating that `name` must be provided explicitly.
+The server always infers `source_type` from the
 `source` value: `.git` suffix or `git://` scheme = git, `oci://` = oci,
 `.zip` = zip, and null `source` = mlflow (content stored in MLflow
 artifact storage). The one exception is embedded skills created during
