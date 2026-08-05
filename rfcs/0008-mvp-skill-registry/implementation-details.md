@@ -406,7 +406,9 @@ class AgentPluginVersion:
 is unique.
 
 **Agent plugin-level source.** An agent plugin version is either monolithic or
-assembled, never both:
+assembled, never both. All versions of a given agent plugin must be the
+same kind; the server rejects a version whose kind differs from
+existing versions of the same agent plugin.
 
 - **Monolithic:** has its own `source_type`, `source`, and `subpath`,
   pointing to a single artifact (e.g., an OCI
@@ -1338,11 +1340,33 @@ monolithic `AgentPluginVersion` with the original `source_type`,
 skills. This preserves a pullable link to the complete original plugin
 while keeping registry entries limited to skills.
 
-The import fails if no skills are discovered. Since versions are
-server-assigned, import always creates new versions and does not
-conflict with existing version numbers. A name conflict (an existing
-skill with the same name) is resolved by the server creating the
-next version for that skill.
+The import fails if no skills are discovered.
+
+#### Re-import behavior
+
+When the target agent plugin already has at least one version, import
+matches discovered skills to existing members using the `#subpath`
+fragment from the most recent agent plugin version's member list:
+
+1. **Matching subpath:** The discovered skill's plugin-relative
+   directory matches a `#subpath` in the previous member list. Import
+   creates a new version of that existing skill (identified by the
+   member reference in the previous agent plugin version, not by name
+   lookup).
+2. **New subpath:** The directory does not match any previous member.
+   Import creates a new skill. The embedded skill's version number
+   matches the agent plugin version, consistent with the rule that
+   embedded skills use the agent plugin version.
+3. **Removed subpath:** A previous member's subpath is not found in the
+   new source. The member is omitted from the new agent plugin version.
+   The skill and its existing versions remain in the registry.
+
+After processing all discovered skills, import creates a new
+`AgentPluginVersion` with updated member references. Previous agent
+plugin versions are immutable and unchanged.
+
+Since versions are server-assigned, import does not conflict with
+existing version numbers.
 
 ### Warnings and result
 

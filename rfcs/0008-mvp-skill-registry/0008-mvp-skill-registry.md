@@ -241,6 +241,49 @@ infrastructure; registry-specific trace linkage (SKILL spans,
    discovery, lifecycle, and pull flows as manually registered
    entries.
 
+#### Update an imported agent plugin
+
+1. The plugin author releases an updated version. Re-import from the
+   new source:
+   ```bash
+   mlflow agent-plugins import \
+       --source https://github.com/acme/plugins.git@v2.0.0 \
+       --subpath pr-workflow \
+       --skill-uri skills:/pr-workflow
+   ```
+2. MLflow looks up the latest version of the `pr-workflow` agent
+   plugin and compares discovered skill directories against the
+   `#subpath` fragments in its member list.
+3. Skills whose subpaths match existing members get new versions of
+   those skills. New subpaths become new skills. Members whose
+   subpaths are no longer in the source are omitted from the new
+   agent plugin version.
+4. A new agent plugin version is created with the updated member
+   references. Previous versions remain unchanged.
+
+#### Update an assembled agent plugin after a member skill changes
+
+1. A new version of the `code-review` skill is registered:
+   ```bash
+   mlflow skills register --skill-uri skills:/code-review \
+       --source https://github.com/acme/agent-skills.git@v2.0.0 \
+       --subpath code-review
+   ```
+2. Find assembled agent plugins that include `code-review`:
+   ```bash
+   mlflow skills get --skill-uri skills:/code-review
+   ```
+   The skill detail includes agent plugin memberships.
+3. Create a new version of the agent plugin with the updated member:
+   ```bash
+   mlflow agent-plugins create-version --skill-uri skills:/pr-workflow \
+       --skill skills:/code-review/2 \
+       --skill skills:/style-check/1
+   ```
+4. The previous agent plugin version is unchanged. Agents using
+   aliases like `skills:/pr-workflow@production` continue to resolve
+   to the old version until the alias is updated.
+
 #### Discover a skill for a specific purpose
 
 1. Search the registry by keyword:
@@ -656,10 +699,19 @@ Import does not install the plugin or translate an MLflow agent plugin
 into another agent plugin format.
 
 The agent plugin version number is server-assigned. Embedded skills use the
-agent plugin version. Import never overwrites or reuses an existing skill or
-agent plugin version. The client checks for naming and version conflicts
-before creating registry records and fails the import if any target
-`(name, version)` already exists.
+agent plugin version.
+
+When importing a source into an agent plugin that already has previous
+versions, import matches discovered skills to existing members by
+comparing each skill's plugin-relative directory path against the
+`#subpath` fragments in the most recent agent plugin version's member
+list. A matching subpath creates a new version of the existing skill.
+A new subpath (not in the previous version) creates a new skill
+whose version number matches the agent plugin version. A previous
+member whose subpath no longer appears in the source is omitted from
+the new agent plugin version but remains in the registry.
+This allows re-importing an updated plugin without requiring name-based
+matching or content diffing.
 
 See [implementation-details.md: Plugin
 import](implementation-details.md#plugin-import) for the SDK return
