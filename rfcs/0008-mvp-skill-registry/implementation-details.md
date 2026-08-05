@@ -1022,7 +1022,7 @@ SKILL.md entry point. If the server cannot access the source (e.g.,
 private repositories requiring client-side credentials), registration
 fails with an error indicating that `name` must be provided explicitly.
 The server always infers `source_type` from the
-`source` value: `.git` suffix or `git://` scheme = git, `oci://` = oci,
+`source` value: `.git` before the `@ref` portion or `git://` scheme = git, `oci://` = oci,
 `.zip` = zip, and null `source` = mlflow (content stored in MLflow
 artifact storage). The one exception is embedded skills created during
 agent plugin import, where the importer sets `source_type`, `source`, and
@@ -1414,22 +1414,11 @@ plugin_version = mlflow.genai.create_agent_plugin_version(
         "skills:/test-coverage/1",
     ],
 )
-
-# Monolithic agent plugin from a single OCI image. Embedded member
-# versions are registered without their own sources.
-mlflow.genai.register_skill(
-    name="embedded-review",
-)
-
-mono_plugin = mlflow.genai.create_agent_plugin(name="pr-workflow-mono")
-plugin_version = mlflow.genai.create_agent_plugin_version(
-    agent_plugin_id=mono_plugin.agent_plugin_id,
-    source="oci://ghcr.io/acme/agent-plugin:v1.0.0",
-    skills=[
-        "skills:/embedded-review/1#skills/embedded-review",
-    ],
-)
 ```
+
+Monolithic agent plugins are created through `import_plugin()`, which
+handles embedded skill creation internally. See the
+[Plugin import](#plugin-import) section for details.
 
 ### Discover and consume skills
 
