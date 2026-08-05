@@ -15,20 +15,22 @@ workspace-scoped.
 
 | Column | Type | Notes |
 |--------|------|-------|
-| `workspace` | `String(63)` | PK, default `'default'` |
-| `name` | `String(256)` | PK |
+| `skill_id` | `String(36)` | PK, server-assigned UUID |
+| `workspace` | `String(63)` | default `'default'` |
+| `name` | `String(256)` | unique within workspace |
 | `description` | `String(5000)` | |
 | `created_by` | `String(256)` | |
 | `last_updated_by` | `String(256)` | |
 | `creation_timestamp` | `BigInteger` | millis since epoch |
 | `last_updated_timestamp` | `BigInteger` | millis since epoch |
 
+UniqueConstraint: `(workspace, name)`.
+
 ### `skill_versions`
 
 | Column | Type | Notes |
 |--------|------|-------|
-| `workspace` | `String(63)` | PK, FK |
-| `name` | `String(256)` | PK, FK |
+| `skill_id` | `String(36)` | PK, FK to `skills` |
 | `version` | `Integer` | PK, server-assigned monotonic integer |
 | `source_type` | `String(20)` | nullable; `git`, `oci`, `zip`, `mlflow` |
 | `source` | `String(2048)` | nullable pointer to skill content |
@@ -39,24 +41,23 @@ workspace-scoped.
 | `creation_timestamp` | `BigInteger` | millis since epoch |
 | `last_updated_timestamp` | `BigInteger` | millis since epoch |
 
-FK: `(workspace, name)` references `skills`, CASCADE delete. This
+FK: `skill_id` references `skills`, CASCADE delete. This
 supports administrative hard deletion of the parent `Skill`; normal
 version deletion is a status transition to `deleted` and does not
 physically remove the version row.
 
 **Version ordering**: versions are monotonic integers assigned by
-the server. Each new version for a given `(workspace, name)` receives
+the server. Each new version for a given skill receives
 the next integer. Ordering is a simple integer comparison.
 
-**Index**: `ix_skill_versions_latest_lookup` on `(workspace, name,
+**Index**: `ix_skill_versions_latest_lookup` on `(skill_id,
 status, version)` supports latest-resolution lookups.
 
 ### `skill_tags`
 
 | Column | Type | Notes |
 |--------|------|-------|
-| `workspace` | `String(63)` | PK, FK |
-| `name` | `String(256)` | PK, FK |
+| `skill_id` | `String(36)` | PK, FK to `skills` |
 | `key` | `String(256)` | PK |
 | `value` | `Text` | |
 
@@ -64,9 +65,8 @@ status, version)` supports latest-resolution lookups.
 
 | Column | Type | Notes |
 |--------|------|-------|
-| `workspace` | `String(63)` | PK, FK |
-| `name` | `String(256)` | PK, FK |
-| `version` | `Integer` | PK, FK |
+| `skill_id` | `String(36)` | PK, FK to `skill_versions` |
+| `version` | `Integer` | PK, FK to `skill_versions` |
 | `key` | `String(256)` | PK |
 | `value` | `Text` | |
 
@@ -74,8 +74,7 @@ status, version)` supports latest-resolution lookups.
 
 | Column | Type | Notes |
 |--------|------|-------|
-| `workspace` | `String(63)` | PK, FK |
-| `name` | `String(256)` | PK, FK |
+| `skill_id` | `String(36)` | PK, FK to `skills` |
 | `alias` | `String(256)` | PK |
 | `version` | `Integer` | target version |
 
@@ -83,20 +82,22 @@ status, version)` supports latest-resolution lookups.
 
 | Column | Type | Notes |
 |--------|------|-------|
-| `workspace` | `String(63)` | PK, default `'default'` |
-| `name` | `String(256)` | PK |
+| `skill_bundle_id` | `String(36)` | PK, server-assigned UUID |
+| `workspace` | `String(63)` | default `'default'` |
+| `name` | `String(256)` | unique within workspace |
 | `description` | `String(5000)` | |
 | `created_by` | `String(256)` | |
 | `last_updated_by` | `String(256)` | |
 | `creation_timestamp` | `BigInteger` | millis since epoch |
 | `last_updated_timestamp` | `BigInteger` | millis since epoch |
 
+UniqueConstraint: `(workspace, name)`.
+
 ### `skill_bundle_versions`
 
 | Column | Type | Notes |
 |--------|------|-------|
-| `workspace` | `String(63)` | PK, FK |
-| `name` | `String(256)` | PK, FK |
+| `skill_bundle_id` | `String(36)` | PK, FK to `skill_bundles` |
 | `version` | `Integer` | PK, server-assigned monotonic integer |
 | `source_type` | `String(20)` | optional; `git`, `oci`, `zip`, `mlflow` |
 | `source` | `String(2048)` | optional pointer to bundle artifact |
@@ -107,7 +108,7 @@ status, version)` supports latest-resolution lookups.
 | `creation_timestamp` | `BigInteger` | millis since epoch |
 | `last_updated_timestamp` | `BigInteger` | millis since epoch |
 
-FK: `(workspace, name)` references `skill_bundles`, CASCADE delete.
+FK: `skill_bundle_id` references `skill_bundles`, CASCADE delete.
 Version ordering and index follow the same pattern as
 `skill_versions`.
 
@@ -115,23 +116,22 @@ Version ordering and index follow the same pattern as
 
 | Column | Type | Notes |
 |--------|------|-------|
-| `workspace` | `String(63)` | PK |
-| `bundle_name` | `String(256)` | PK, FK to `skill_bundle_versions` |
+| `skill_bundle_id` | `String(36)` | PK, FK to `skill_bundle_versions` |
 | `bundle_version` | `Integer` | PK, FK to `skill_bundle_versions` |
-| `member_name` | `String(256)` | PK |
-| `member_version` | `Integer` | PK |
+| `member_skill_id` | `String(36)` | PK, FK to `skill_versions` |
+| `member_version` | `Integer` | PK, FK to `skill_versions` |
 | `member_subpath` | `String(2048)` | nullable; parsed from `#subpath` fragment of member URI |
 
-FK: `(workspace, bundle_name, bundle_version)` references
+FK: `(skill_bundle_id, bundle_version)` references
 `skill_bundle_versions`, CASCADE delete. A FK to `skill_versions`
-enforces referential integrity with RESTRICT delete.
+via `(member_skill_id, member_version)` enforces referential
+integrity with RESTRICT delete.
 
 ### `skill_bundle_tags`
 
 | Column | Type | Notes |
 |--------|------|-------|
-| `workspace` | `String(63)` | PK, FK |
-| `name` | `String(256)` | PK, FK |
+| `skill_bundle_id` | `String(36)` | PK, FK to `skill_bundles` |
 | `key` | `String(256)` | PK |
 | `value` | `Text` | |
 
@@ -139,9 +139,8 @@ enforces referential integrity with RESTRICT delete.
 
 | Column | Type | Notes |
 |--------|------|-------|
-| `workspace` | `String(63)` | PK, FK |
-| `name` | `String(256)` | PK, FK |
-| `version` | `Integer` | PK, FK |
+| `skill_bundle_id` | `String(36)` | PK, FK to `skill_bundle_versions` |
+| `version` | `Integer` | PK, FK to `skill_bundle_versions` |
 | `key` | `String(256)` | PK |
 | `value` | `Text` | |
 
@@ -149,13 +148,14 @@ enforces referential integrity with RESTRICT delete.
 
 | Column | Type | Notes |
 |--------|------|-------|
-| `workspace` | `String(63)` | PK, FK |
-| `name` | `String(256)` | PK, FK |
+| `skill_bundle_id` | `String(36)` | PK, FK to `skill_bundles` |
 | `alias` | `String(256)` | PK |
 | `version` | `Integer` | target bundle version |
 
-**Workspace handling.** All tables use `(workspace, ...)` as the leading
-primary key components. Single-tenant deployments use `'default'`.
+**Workspace handling.** Parent entity tables (`skills`, `skill_bundles`)
+carry a `workspace` column for scoping. Single-tenant deployments use
+`'default'`. Child tables reference the parent by UUID, so workspace is
+not repeated in child table primary keys.
 
 **Timestamps.** Set at the application layer via
 `get_current_time_millis()`, not via DDL defaults.
@@ -196,6 +196,7 @@ class SkillStatus(StrEnum):
 
 @dataclass
 class Skill:
+    skill_id: str  # server-assigned UUID
     name: str
     description: str | None = None
     workspace: str | None = None
@@ -211,7 +212,8 @@ class Skill:
 
 | Field | Type | Description |
 |---|---|---|
-| `name` | `str` | Stable logical asset name, unique within a workspace |
+| `skill_id` | `str` | Server-assigned UUID primary key |
+| `name` | `str` | Human-readable name, unique within workspace |
 | `description` | `str` | Optional human-readable description of the skill |
 | `status` | `SkillStatus` | Read-only; derived from the parent-resolved version: highest active version number if present, otherwise highest non-deleted non-active version number |
 | `aliases` | `dict[str, int]` | Stable version pointers (e.g., `{"production": 2}`); read-only, populated from `skill_aliases` table |
@@ -230,8 +232,9 @@ class SkillSourceType(StrEnum):
 
 @dataclass
 class SkillVersion:
-    name: str
+    skill_id: str  # FK to Skill
     version: int
+    name: str | None = None  # denormalized from parent Skill for convenience
     source_type: SkillSourceType | None = None
     source: str | None = None
     subpath: str | None = None
@@ -248,7 +251,9 @@ class SkillVersion:
 
 | Field | Type | Description |
 |---|---|---|
+| `skill_id` | `str` | FK to parent Skill |
 | `version` | `int` | Server-assigned monotonic integer. Each new version receives the next integer |
+| `name` | `str` | Denormalized from parent Skill for convenience in responses |
 | `source_type` | `SkillSourceType` | Server-inferred distribution mechanism: `git`, `oci`, `zip`, `mlflow`. Inferred from the `source` URL scheme |
 | `source` | `str` | Pointer to the content in the source system. Required for standalone pull. May be omitted only when the version's content lives within a bundle-level artifact, in which case the containing bundle membership identifies the embedded content path |
 | `subpath` | `str` | Optional path within the artifact where this skill's content lives. See subpath usage table below |
@@ -276,7 +281,7 @@ asset lives." Its applicability varies by source type:
 | `oci` | Path within the OCI image (e.g., `plugins/code-review`). Used when multiple skills share a single image. |
 | `zip` | Path within the archive (e.g., `plugins/code-review`). Used when multiple skills share a single archive. |
 | `git` | Path within the repository (e.g., `code-review`). Used when the skill content is not at the repository root. The `source` field contains the clone URL with `@<ref>` suffix; `subpath` locates the content within the repo. |
-| `mlflow` | Not used. The artifact path is derived from the skill name and version. |
+| `mlflow` | Not used. The artifact path is derived from the skill ID and version. |
 
 **Git source format.** For `source_type="git"`, `source` is a Git
 clone URL with an `@<ref>` suffix to identify the branch, tag, or
@@ -295,8 +300,8 @@ stored alongside their models, or who operate in airgapped
 environments where external sources are not reachable.
 
 Content is stored as a directory tree of individual files under a
-controlled artifact path derived from the skill name and version
-(e.g., `skills/<name>/<version>/`), consistent with how MLflow stores
+controlled artifact path derived from the skill ID and version
+(e.g., `skills/<skill_id>/<version>/`), consistent with how MLflow stores
 model artifacts. The `source` field is null for MLflow-stored content;
 the system knows where to find it by convention. Pull downloads the
 directory tree from the artifact store. The MLflow UI can browse
@@ -314,7 +319,7 @@ MLflow artifact storage rather than treating it as a remote pointer:
    `source_type="mlflow"` from the null source.
 3. Using the returned version number, the client uploads each file
    through MLflow's existing artifact APIs to the controlled artifact
-   prefix (`skills/<name>/<version>/`).
+   prefix (`skills/<skill_id>/<version>/`).
 
 Version creation and upload are not atomic. If upload fails after the
 version record is created, the version exists with no content. The
@@ -322,10 +327,10 @@ client makes a best-effort attempt to delete the version record and
 any partially uploaded files. A backend without deletion support can
 retain unreferenced uploaded files until garbage collection.
 
-**Version uniqueness.** The combination of `(name, version)` is unique
-within a workspace. A skill version represents a single logical
-version of a capability; `source` describes where to find it but is
-not part of its identity.
+**Version uniqueness.** The combination of `(skill_id, version)` is
+unique. A skill version represents a single logical version of a
+capability; `source` describes where to find it but is not part of
+its identity.
 
 **Immutability contract.** `source_type`, `source`, `subpath`,
 and `version` are immutable after creation. To point
@@ -341,6 +346,7 @@ top-level pattern as Skill: versions, tags, and aliases.
 ```python
 @dataclass
 class SkillBundle:
+    skill_bundle_id: str  # server-assigned UUID
     name: str
     description: str | None = None
     workspace: str | None = None
@@ -376,8 +382,9 @@ convention:
 ```python
 @dataclass
 class SkillBundleVersion:
-    name: str
+    skill_bundle_id: str  # FK to SkillBundle
     version: int
+    name: str | None = None  # denormalized from parent SkillBundle for convenience
     source_type: SkillSourceType | None = None
     source: str | None = None
     subpath: str | None = None
@@ -395,8 +402,8 @@ class SkillBundleVersion:
 
 ### SkillBundleVersion field details
 
-**Version uniqueness.** The combination of `(name, version)` is unique
-within a workspace.
+**Version uniqueness.** The combination of `(skill_bundle_id, version)`
+is unique.
 
 **Bundle-level source.** A bundle version is either monolithic or
 assembled, never both:
@@ -485,7 +492,7 @@ class SkillRegistryMixin:
     ) -> Skill:
         raise NotImplementedError(self.__class__.__name__)
 
-    def get_skill(self, name: str) -> Skill:
+    def get_skill(self, skill_id: str) -> Skill:
         raise NotImplementedError(self.__class__.__name__)
 
     def search_skills(
@@ -499,19 +506,19 @@ class SkillRegistryMixin:
 
     def update_skill(
         self,
-        name: str,
+        skill_id: str,
         description: str | None = NOT_SET,
     ) -> Skill:
         raise NotImplementedError(self.__class__.__name__)
 
-    def delete_skill(self, name: str) -> None:
+    def delete_skill(self, skill_id: str) -> None:
         raise NotImplementedError(self.__class__.__name__)
 
     # --- SkillVersion operations ---
 
     def create_skill_version(
         self,
-        name: str,
+        skill_id: str,
         source_type: str | None = None,
         source: str | None = None,
         subpath: str | None = None,
@@ -520,21 +527,21 @@ class SkillRegistryMixin:
         raise NotImplementedError(self.__class__.__name__)
 
     def get_skill_version(
-        self, name: str, version: int,
+        self, skill_id: str, version: int,
     ) -> SkillVersion:
         raise NotImplementedError(self.__class__.__name__)
 
     def get_skill_version_by_alias(
-        self, name: str, alias: str,
+        self, skill_id: str, alias: str,
     ) -> SkillVersion:
         raise NotImplementedError(self.__class__.__name__)
 
-    def get_latest_skill_version(self, name: str) -> SkillVersion:
+    def get_latest_skill_version(self, skill_id: str) -> SkillVersion:
         raise NotImplementedError(self.__class__.__name__)
 
     def search_skill_versions(
         self,
-        name: str,
+        skill_id: str,
         filter_string: str | None = None,
         max_results: int = SEARCH_MAX_RESULTS_DEFAULT,
         order_by: list[str] | None = None,
@@ -544,47 +551,47 @@ class SkillRegistryMixin:
 
     def update_skill_version(
         self,
-        name: str,
+        skill_id: str,
         version: int,
         status: SkillStatus | None = NOT_SET,
     ) -> SkillVersion:
         raise NotImplementedError(self.__class__.__name__)
 
     def delete_skill_version(
-        self, name: str, version: int,
+        self, skill_id: str, version: int,
     ) -> None:
         raise NotImplementedError(self.__class__.__name__)
 
     # --- Skill tag operations ---
 
     def set_skill_tag(
-        self, name: str, key: str, value: str,
+        self, skill_id: str, key: str, value: str,
     ) -> None:
         raise NotImplementedError(self.__class__.__name__)
 
-    def delete_skill_tag(self, name: str, key: str) -> None:
+    def delete_skill_tag(self, skill_id: str, key: str) -> None:
         raise NotImplementedError(self.__class__.__name__)
 
     def set_skill_version_tag(
-        self, name: str, version: int,
+        self, skill_id: str, version: int,
         key: str, value: str,
     ) -> None:
         raise NotImplementedError(self.__class__.__name__)
 
     def delete_skill_version_tag(
-        self, name: str, version: int, key: str,
+        self, skill_id: str, version: int, key: str,
     ) -> None:
         raise NotImplementedError(self.__class__.__name__)
 
     # --- Skill alias operations ---
 
     def set_skill_alias(
-        self, name: str, alias: str, version: int,
+        self, skill_id: str, alias: str, version: int,
     ) -> None:
         raise NotImplementedError(self.__class__.__name__)
 
     def delete_skill_alias(
-        self, name: str, alias: str,
+        self, skill_id: str, alias: str,
     ) -> None:
         raise NotImplementedError(self.__class__.__name__)
 
@@ -596,7 +603,7 @@ class SkillRegistryMixin:
     ) -> SkillBundle:
         raise NotImplementedError(self.__class__.__name__)
 
-    def get_skill_bundle(self, name: str) -> SkillBundle:
+    def get_skill_bundle(self, skill_bundle_id: str) -> SkillBundle:
         raise NotImplementedError(self.__class__.__name__)
 
     def search_skill_bundles(
@@ -610,19 +617,19 @@ class SkillRegistryMixin:
 
     def update_skill_bundle(
         self,
-        name: str,
+        skill_bundle_id: str,
         description: str | None = NOT_SET,
     ) -> SkillBundle:
         raise NotImplementedError(self.__class__.__name__)
 
-    def delete_skill_bundle(self, name: str) -> None:
+    def delete_skill_bundle(self, skill_bundle_id: str) -> None:
         raise NotImplementedError(self.__class__.__name__)
 
     # --- SkillBundleVersion operations ---
 
     def create_skill_bundle_version(
         self,
-        name: str,
+        skill_bundle_id: str,
         skills: list[str] | None = None,
         source_type: str | None = None,
         source: str | None = None,
@@ -631,23 +638,23 @@ class SkillRegistryMixin:
         raise NotImplementedError(self.__class__.__name__)
 
     def get_skill_bundle_version(
-        self, name: str, version: int,
+        self, skill_bundle_id: str, version: int,
     ) -> SkillBundleVersion:
         raise NotImplementedError(self.__class__.__name__)
 
     def get_skill_bundle_version_by_alias(
-        self, name: str, alias: str,
+        self, skill_bundle_id: str, alias: str,
     ) -> SkillBundleVersion:
         raise NotImplementedError(self.__class__.__name__)
 
     def get_latest_skill_bundle_version(
-        self, name: str,
+        self, skill_bundle_id: str,
     ) -> SkillBundleVersion:
         raise NotImplementedError(self.__class__.__name__)
 
     def search_skill_bundle_versions(
         self,
-        name: str,
+        skill_bundle_id: str,
         filter_string: str | None = None,
         max_results: int = SEARCH_MAX_RESULTS_DEFAULT,
         order_by: list[str] | None = None,
@@ -657,49 +664,49 @@ class SkillRegistryMixin:
 
     def update_skill_bundle_version(
         self,
-        name: str,
+        skill_bundle_id: str,
         version: int,
         status: SkillStatus | None = NOT_SET,
     ) -> SkillBundleVersion:
         raise NotImplementedError(self.__class__.__name__)
 
     def delete_skill_bundle_version(
-        self, name: str, version: int,
+        self, skill_bundle_id: str, version: int,
     ) -> None:
         raise NotImplementedError(self.__class__.__name__)
 
     # --- SkillBundle tag operations ---
 
     def set_skill_bundle_tag(
-        self, name: str, key: str, value: str,
+        self, skill_bundle_id: str, key: str, value: str,
     ) -> None:
         raise NotImplementedError(self.__class__.__name__)
 
     def delete_skill_bundle_tag(
-        self, name: str, key: str,
+        self, skill_bundle_id: str, key: str,
     ) -> None:
         raise NotImplementedError(self.__class__.__name__)
 
     def set_skill_bundle_version_tag(
-        self, name: str, version: int,
+        self, skill_bundle_id: str, version: int,
         key: str, value: str,
     ) -> None:
         raise NotImplementedError(self.__class__.__name__)
 
     def delete_skill_bundle_version_tag(
-        self, name: str, version: int, key: str,
+        self, skill_bundle_id: str, version: int, key: str,
     ) -> None:
         raise NotImplementedError(self.__class__.__name__)
 
     # --- SkillBundle alias operations ---
 
     def set_skill_bundle_alias(
-        self, name: str, alias: str, version: int,
+        self, skill_bundle_id: str, alias: str, version: int,
     ) -> None:
         raise NotImplementedError(self.__class__.__name__)
 
     def delete_skill_bundle_alias(
-        self, name: str, alias: str,
+        self, skill_bundle_id: str, alias: str,
     ) -> None:
         raise NotImplementedError(self.__class__.__name__)
 ```
@@ -710,9 +717,14 @@ The corresponding `set_*_alias()` methods reject it. Alias lookup with
 `get_latest_skill_bundle_version()` rather than reading a stored alias
 row.
 
-For update fields, omitting a parameter leaves the stored value unchanged,
-while passing `None` to a nullable field explicitly sets the field to
-`null`.
+For update fields, omitting a parameter leaves the stored value
+unchanged, while passing `None` to a nullable field explicitly sets
+the field to `null`.
+
+All store methods that identify a specific entity use the UUID
+(`skill_id` or `skill_bundle_id`) rather than name. Name-based
+lookups are provided at the SDK layer via `search_skills()` with a
+name filter.
 
 ## SDK convenience functions
 
@@ -734,7 +746,8 @@ def register_skill(
     status: str = "draft",
 ) -> SkillVersion:
     """Register a skill version. The server assigns the next
-    monotonic integer version. Auto-creates the parent Skill if
+    monotonic integer version and a UUID for the parent Skill if
+    it is auto-created. Auto-creates the parent Skill if
     it does not exist (with null description) and
     otherwise reuses the existing parent. To set parent-level
     metadata, use create_skill() before registering versions or
@@ -755,7 +768,7 @@ def create_skill(
 ) -> Skill: ...
 
 
-def get_skill(*, name: str) -> Skill: ...
+def get_skill(*, skill_id: str) -> Skill: ...
 
 
 def search_skills(
@@ -769,34 +782,34 @@ def search_skills(
 
 def update_skill(
     *,
-    name: str,
+    skill_id: str,
     description: str | None = NOT_SET,
 ) -> Skill: ...
 
 
-def delete_skill(*, name: str) -> None: ...
+def delete_skill(*, skill_id: str) -> None: ...
 
 
 def create_skill_version(
     *,
-    name: str,
+    skill_id: str,
     source: str | None = None,
     subpath: str | None = None,
 ) -> SkillVersion: ...
 
 
-def get_skill_version(*, name: str, version: int) -> SkillVersion: ...
+def get_skill_version(*, skill_id: str, version: int) -> SkillVersion: ...
 
 
-def get_skill_version_by_alias(*, name: str, alias: str) -> SkillVersion: ...
+def get_skill_version_by_alias(*, skill_id: str, alias: str) -> SkillVersion: ...
 
 
-def get_latest_skill_version(*, name: str) -> SkillVersion: ...
+def get_latest_skill_version(*, skill_id: str) -> SkillVersion: ...
 
 
 def search_skill_versions(
     *,
-    name: str,
+    skill_id: str,
     filter_string: str | None = None,
     max_results: int = 100,
     order_by: list[str] | None = None,
@@ -806,13 +819,13 @@ def search_skill_versions(
 
 def update_skill_version(
     *,
-    name: str,
+    skill_id: str,
     version: int,
     status: str | None = NOT_SET,
 ) -> SkillVersion: ...
 
 
-def delete_skill_version(*, name: str, version: int) -> None: ...
+def delete_skill_version(*, skill_id: str, version: int) -> None: ...
 
 
 def create_skill_bundle(
@@ -824,14 +837,14 @@ def create_skill_bundle(
 
 def create_skill_bundle_version(
     *,
-    name: str,
+    skill_bundle_id: str,
     skills: list[str] | None = None,
     source: str | None = None,
     subpath: str | None = None,
 ) -> SkillBundleVersion: ...
 
 
-def get_skill_bundle(*, name: str) -> SkillBundle: ...
+def get_skill_bundle(*, skill_bundle_id: str) -> SkillBundle: ...
 
 
 def search_skill_bundles(
@@ -845,30 +858,30 @@ def search_skill_bundles(
 
 def update_skill_bundle(
     *,
-    name: str,
+    skill_bundle_id: str,
     description: str | None = NOT_SET,
 ) -> SkillBundle: ...
 
 
-def delete_skill_bundle(*, name: str) -> None: ...
+def delete_skill_bundle(*, skill_bundle_id: str) -> None: ...
 
 
 def get_skill_bundle_version(
-    *, name: str, version: int,
+    *, skill_bundle_id: str, version: int,
 ) -> SkillBundleVersion: ...
 
 
 def get_skill_bundle_version_by_alias(
-    *, name: str, alias: str,
+    *, skill_bundle_id: str, alias: str,
 ) -> SkillBundleVersion: ...
 
 
-def get_latest_skill_bundle_version(*, name: str) -> SkillBundleVersion: ...
+def get_latest_skill_bundle_version(*, skill_bundle_id: str) -> SkillBundleVersion: ...
 
 
 def search_skill_bundle_versions(
     *,
-    name: str,
+    skill_bundle_id: str,
     filter_string: str | None = None,
     max_results: int = 100,
     order_by: list[str] | None = None,
@@ -878,38 +891,38 @@ def search_skill_bundle_versions(
 
 def update_skill_bundle_version(
     *,
-    name: str,
+    skill_bundle_id: str,
     version: int,
     status: str | None = NOT_SET,
 ) -> SkillBundleVersion: ...
 
 
-def delete_skill_bundle_version(*, name: str, version: int) -> None: ...
+def delete_skill_bundle_version(*, skill_bundle_id: str, version: int) -> None: ...
 
 
-def set_skill_tag(*, name: str, key: str, value: str) -> None: ...
+def set_skill_tag(*, skill_id: str, key: str, value: str) -> None: ...
 
-def delete_skill_tag(*, name: str, key: str) -> None: ...
+def delete_skill_tag(*, skill_id: str, key: str) -> None: ...
 
-def set_skill_version_tag(*, name: str, version: int, key: str, value: str) -> None: ...
+def set_skill_version_tag(*, skill_id: str, version: int, key: str, value: str) -> None: ...
 
-def delete_skill_version_tag(*, name: str, version: int, key: str) -> None: ...
+def delete_skill_version_tag(*, skill_id: str, version: int, key: str) -> None: ...
 
-def set_skill_alias(*, name: str, alias: str, version: int) -> None: ...
+def set_skill_alias(*, skill_id: str, alias: str, version: int) -> None: ...
 
-def delete_skill_alias(*, name: str, alias: str) -> None: ...
+def delete_skill_alias(*, skill_id: str, alias: str) -> None: ...
 
-def set_skill_bundle_tag(*, name: str, key: str, value: str) -> None: ...
+def set_skill_bundle_tag(*, skill_bundle_id: str, key: str, value: str) -> None: ...
 
-def delete_skill_bundle_tag(*, name: str, key: str) -> None: ...
+def delete_skill_bundle_tag(*, skill_bundle_id: str, key: str) -> None: ...
 
-def set_skill_bundle_version_tag(*, name: str, version: int, key: str, value: str) -> None: ...
+def set_skill_bundle_version_tag(*, skill_bundle_id: str, version: int, key: str, value: str) -> None: ...
 
-def delete_skill_bundle_version_tag(*, name: str, version: int, key: str) -> None: ...
+def delete_skill_bundle_version_tag(*, skill_bundle_id: str, version: int, key: str) -> None: ...
 
-def set_skill_bundle_alias(*, name: str, alias: str, version: int) -> None: ...
+def set_skill_bundle_alias(*, skill_bundle_id: str, alias: str, version: int) -> None: ...
 
-def delete_skill_bundle_alias(*, name: str, alias: str) -> None: ...
+def delete_skill_bundle_alias(*, skill_bundle_id: str, alias: str) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -966,20 +979,21 @@ def import_bundle(
 
 def pull(
     *,
-    name: str | None = None,
-    bundle: str | None = None,
+    skill_id: str | None = None,
+    skill_bundle_id: str | None = None,
     version: int | None = None,
     alias: str | None = None,
     destination: str = ".",
 ) -> str:
     """Pull skill or bundle content from registered sources to a
-    local directory. Specify name for a single skill or bundle
-    for a skill bundle."""
+    local directory. Specify skill_id for a single skill or
+    skill_bundle_id for a skill bundle."""
 
 
 # Example usage:
 version = mlflow.genai.register_skill(name="code-review", source="https://github.com/acme/skills.git@v1.0.0")
-servers = mlflow.genai.search_skills(filter_string="status = 'active'")
+# version.skill_id contains the UUID for subsequent operations
+skills = mlflow.genai.search_skills(filter_string="status = 'active'")
 ```
 
 For SDK update methods, `NOT_SET` means "leave unchanged" while `None`
@@ -1030,21 +1044,21 @@ All paths relative to the logical skills router prefix.
 | `POST` | `/` | Create a skill |
 | `GET` | `/` | Search skills |
 | `POST` | `/register` | Register a skill version (name optional; server infers from source when omitted, auto-creates parent) |
-| `GET` | `/{name}` | Get skill by name |
-| `PATCH` | `/{name}` | Update skill fields |
-| `DELETE` | `/{name}` | Hard-delete skill (cascades, subject to references) |
-| `POST` | `/{name}/versions` | Create a skill version (name from path, no name inference; source_type is still server-inferred) |
-| `GET` | `/{name}/versions` | Search versions |
-| `GET` | `/{name}/versions/{version}` | Get a specific version |
-| `PATCH` | `/{name}/versions/{version}` | Update version |
-| `DELETE` | `/{name}/versions/{version}` | Soft-delete a version (`status='deleted'`) |
-| `POST` | `/{name}/tags` | Set a skill-level tag |
-| `DELETE` | `/{name}/tags/{key}` | Delete a skill-level tag |
-| `POST` | `/{name}/versions/{version}/tags` | Set a version-level tag |
-| `DELETE` | `/{name}/versions/{version}/tags/{key}` | Delete a version tag |
-| `POST` | `/{name}/aliases` | Set an alias |
-| `GET` | `/{name}/aliases/{alias}` | Resolve alias to `SkillVersion` |
-| `DELETE` | `/{name}/aliases/{alias}` | Delete an alias |
+| `GET` | `/{skill_id}` | Get skill by ID |
+| `PATCH` | `/{skill_id}` | Update skill fields |
+| `DELETE` | `/{skill_id}` | Hard-delete skill (cascades, subject to references) |
+| `POST` | `/{skill_id}/versions` | Create a skill version |
+| `GET` | `/{skill_id}/versions` | Search versions |
+| `GET` | `/{skill_id}/versions/{version}` | Get a specific version |
+| `PATCH` | `/{skill_id}/versions/{version}` | Update version |
+| `DELETE` | `/{skill_id}/versions/{version}` | Soft-delete a version (`status='deleted'`) |
+| `POST` | `/{skill_id}/tags` | Set a skill-level tag |
+| `DELETE` | `/{skill_id}/tags/{key}` | Delete a skill-level tag |
+| `POST` | `/{skill_id}/versions/{version}/tags` | Set a version-level tag |
+| `DELETE` | `/{skill_id}/versions/{version}/tags/{key}` | Delete a version tag |
+| `POST` | `/{skill_id}/aliases` | Set an alias |
+| `GET` | `/{skill_id}/aliases/{alias}` | Resolve alias to `SkillVersion` |
+| `DELETE` | `/{skill_id}/aliases/{alias}` | Delete an alias |
 
 Similarly, skill bundle endpoints are exposed under both
 `/api/3.0/mlflow/skill-bundles` and
@@ -1058,21 +1072,21 @@ All paths relative to the logical skill-bundles router prefix.
 |---|---|---|
 | `POST` | `/` | Create a skill bundle |
 | `GET` | `/` | Search skill bundles |
-| `GET` | `/{name}` | Get bundle by name |
-| `PATCH` | `/{name}` | Update bundle fields |
-| `DELETE` | `/{name}` | Hard-delete bundle (cascades versions and memberships) |
-| `POST` | `/{name}/versions` | Create a bundle version with members |
-| `GET` | `/{name}/versions` | Search bundle versions |
-| `GET` | `/{name}/versions/{version}` | Get a specific bundle version |
-| `PATCH` | `/{name}/versions/{version}` | Update bundle version status |
-| `DELETE` | `/{name}/versions/{version}` | Soft-delete a bundle version (`status='deleted'`) |
-| `POST` | `/{name}/tags` | Set a bundle-level tag |
-| `DELETE` | `/{name}/tags/{key}` | Delete a bundle-level tag |
-| `POST` | `/{name}/versions/{version}/tags` | Set a bundle version tag |
-| `DELETE` | `/{name}/versions/{version}/tags/{key}` | Delete a bundle version tag |
-| `POST` | `/{name}/aliases` | Set a bundle alias |
-| `GET` | `/{name}/aliases/{alias}` | Resolve bundle alias to version |
-| `DELETE` | `/{name}/aliases/{alias}` | Delete a bundle alias |
+| `GET` | `/{skill_bundle_id}` | Get bundle by ID |
+| `PATCH` | `/{skill_bundle_id}` | Update bundle fields |
+| `DELETE` | `/{skill_bundle_id}` | Hard-delete bundle (cascades versions and memberships) |
+| `POST` | `/{skill_bundle_id}/versions` | Create a bundle version with members |
+| `GET` | `/{skill_bundle_id}/versions` | Search bundle versions |
+| `GET` | `/{skill_bundle_id}/versions/{version}` | Get a specific bundle version |
+| `PATCH` | `/{skill_bundle_id}/versions/{version}` | Update bundle version status |
+| `DELETE` | `/{skill_bundle_id}/versions/{version}` | Soft-delete a bundle version (`status='deleted'`) |
+| `POST` | `/{skill_bundle_id}/tags` | Set a bundle-level tag |
+| `DELETE` | `/{skill_bundle_id}/tags/{key}` | Delete a bundle-level tag |
+| `POST` | `/{skill_bundle_id}/versions/{version}/tags` | Set a bundle version tag |
+| `DELETE` | `/{skill_bundle_id}/versions/{version}/tags/{key}` | Delete a bundle version tag |
+| `POST` | `/{skill_bundle_id}/aliases` | Set a bundle alias |
+| `GET` | `/{skill_bundle_id}/aliases/{alias}` | Resolve bundle alias to version |
+| `DELETE` | `/{skill_bundle_id}/aliases/{alias}` | Delete a bundle alias |
 
 ### Pagination and filtering
 
@@ -1091,10 +1105,10 @@ find bundles that include a given skill (reverse membership lookup)
 ### Request and response models
 
 Request models contain only the mutable fields; resource identifiers
-come from path parameters, with one exception: `POST /register`
+come from path parameters (UUIDs), with one exception: `POST /register`
 accepts `name` in the request body (optional, inferred from source
-content when omitted) rather than the path. This parallels RFC-0004's
-top-level `register_mcp_server()` pattern:
+content when omitted) and returns the server-assigned `skill_id`.
+This parallels RFC-0004's top-level `register_mcp_server()` pattern:
 
 ```python
 from pydantic import BaseModel, Field
@@ -1110,7 +1124,7 @@ class UpdateSkillRequest(BaseModel):
 
 
 class CreateSkillVersionRequest(BaseModel):
-    name: str | None = None  # optional for POST /register (inferred from source when omitted); ignored for POST /{name}/versions (name from path)
+    name: str | None = None  # optional for POST /register (inferred from source when omitted); ignored for POST /{skill_id}/versions (name from parent)
     source: str | None = None
     subpath: str | None = None
     status: str = "draft"
@@ -1155,8 +1169,9 @@ class SetTagRequest(BaseModel):
 
 
 class SkillVersionResponse(BaseModel):
-    name: str
+    skill_id: str
     version: int
+    name: str | None = None
     source_type: str | None = None
     source: str | None = None
     subpath: str | None = None
@@ -1170,6 +1185,7 @@ class SkillVersionResponse(BaseModel):
 
 
 class SkillResponse(BaseModel):
+    skill_id: str
     name: str
     description: str | None = None
     status: str | None = None
@@ -1183,8 +1199,9 @@ class SkillResponse(BaseModel):
 
 
 class SkillBundleVersionResponse(BaseModel):
-    name: str
+    skill_bundle_id: str
     version: int
+    name: str | None = None
     source_type: str | None = None
     source: str | None = None
     subpath: str | None = None
@@ -1199,6 +1216,7 @@ class SkillBundleVersionResponse(BaseModel):
 
 
 class SkillBundleResponse(BaseModel):
+    skill_bundle_id: str
     name: str
     description: str | None = None
     status: str | None = None
@@ -1216,13 +1234,24 @@ for convenience, while REST responses expose aliases as
 `list[AliasResponse]` to keep the payload shape explicit and
 consistent with the MCP Server Registry (RFC-0004).
 
+**UUID primary keys.** Skills and skill bundles use server-assigned
+UUIDs as primary keys, following the pattern established by
+`GatewayEndpoint`. The `name` field is unique within a workspace
+(enforced by a unique constraint), so entities can be looked up by
+either UUID or name. This preserves unambiguous name-based URIs and
+deterministic registration while providing stable, opaque identifiers
+for cross-system references.
+
 ## Python SDK and CLI
 
 The `mlflow.genai` module exposes the public registry functions,
 delegating to `MlflowClient`, plus client-side import and pull
 operations that compose those registry functions. Skill-specific entity and request types are also re-exported
 from `mlflow.genai`. The `mlflow skills` CLI command group
-provides the same operations from the command line:
+provides the same operations from the command line. CLI commands
+accept `--skill-id` or `--skill-bundle-id` flags for entity
+identification, and `--skill-uri` as a convenience that resolves
+names and aliases to UUIDs:
 
 | CLI subcommand | SDK function | Description |
 |---|---|---|
@@ -1374,8 +1403,9 @@ mlflow.genai.register_skill(
 )
 
 # Assembled bundle: each member has its own source
+bundle = mlflow.genai.create_skill_bundle(name="pr-workflow")
 bundle_version = mlflow.genai.create_skill_bundle_version(
-    name="pr-workflow",
+    skill_bundle_id=bundle.skill_bundle_id,
     skills=[
         "skills:/code-review/1",
         "skills:/test-coverage/1",
@@ -1388,8 +1418,9 @@ mlflow.genai.register_skill(
     name="embedded-review",
 )
 
+mono_bundle = mlflow.genai.create_skill_bundle(name="pr-workflow-mono")
 bundle_version = mlflow.genai.create_skill_bundle_version(
-    name="pr-workflow-mono",
+    skill_bundle_id=mono_bundle.skill_bundle_id,
     source="oci://ghcr.io/acme/agent-plugin:v1.0.0",
     skills=[
         "skills:/embedded-review/1#skills/embedded-review",
@@ -1400,9 +1431,13 @@ bundle_version = mlflow.genai.create_skill_bundle_version(
 ### Discover and consume skills
 
 ```python
-# Search for active skill versions
+# Find a skill by name
+skills = mlflow.genai.search_skills(filter_string="name = 'code-review'")
+skill = skills[0]
+
+# Search for active versions of that skill
 versions = mlflow.genai.search_skill_versions(
-    name="code-review",
+    skill_id=skill.skill_id,
     filter_string="status = 'active'",
 )
 
@@ -1413,7 +1448,7 @@ bundles = mlflow.genai.search_skill_bundles(
 
 # Get a specific version
 version = mlflow.genai.get_skill_version(
-    name="code-review",
+    skill_id=skill.skill_id,
     version=1,
 )
 # version.source_type == "git"
@@ -1422,20 +1457,23 @@ version = mlflow.genai.get_skill_version(
 
 # Resolve by alias
 version = mlflow.genai.get_skill_version_by_alias(
-    name="code-review",
+    skill_id=skill.skill_id,
     alias="production",
 )
 
 # Get a bundle version and its pinned members
+bundle = mlflow.genai.search_skill_bundles(
+    filter_string="name = 'pr-workflow'",
+)[0]
 bundle_version = mlflow.genai.get_skill_bundle_version(
-    name="pr-workflow",
+    skill_bundle_id=bundle.skill_bundle_id,
     version=1,
 )
 # bundle_version.skills == ["skills:/code-review/1", ...]
 
 # Resolve a bundle alias
 bundle_version = mlflow.genai.get_skill_bundle_version_by_alias(
-    name="pr-workflow",
+    skill_bundle_id=bundle.skill_bundle_id,
     alias="production",
 )
 ```

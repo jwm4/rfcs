@@ -433,7 +433,9 @@ decomposes into `member_name`, `member_version`, and
 A skill is a directory containing a SKILL.md entry point plus
 supporting files (scripts, templates, reference material). The
 `Skill` entity is the logical governed asset, scoped to a workspace.
-Key fields include `name` (unique within workspace), `description`,
+Each skill has a server-assigned UUID primary key (`skill_id`).
+Key fields include `name` (unique within workspace),
+`description`,
 `status` (read-only, derived from the parent-resolved version),
 `latest_version` (read-only, highest active version number), and `aliases`.
 
@@ -449,17 +451,17 @@ same rules apply to `SkillBundle`.
 #### SkillVersion
 
 A versioned record containing a typed source pointer (`git`, `oci`,
-`zip`, or `mlflow`), status, and tags. The `(name, version)` pair is
-unique within a workspace. Source pointers and version numbers are
+`zip`, or `mlflow`), status, and tags. The `(skill_id, version)` pair
+is unique. Source pointers and version numbers are
 immutable after creation; to point to different content, register a
 new version. The optional `subpath` field identifies content within a
 shared artifact (used with Git, OCI, and ZIP).
 
 `register_skill()` creates the parent Skill when needed (with null
-`description`) and otherwise reuses the existing
+`description`, server-assigned UUID) and otherwise reuses the existing
 parent. To set parent-level metadata, use `create_skill()` before
 registering versions or `update_skill()` afterward. If the target
-`(name, version)` already exists, registration fails with an error.
+`(skill_id, version)` already exists, registration fails with an error.
 This matches the MCP Server Registry behavior
 (`register_mcp_server()` in mlflow/mlflow#23696).
 
@@ -472,9 +474,10 @@ rather than a tag-based grouping because they provide versioned
 membership snapshots (reproducible point-in-time combinations),
 bundle-level source pointers (a single OCI image or Git repo),
 independent lifecycle (deprecate a bundle without deprecating its
-members), and direct mapping to the harness plugin concept. Follows
-the same top-level pattern as Skill: versions, tags, aliases, and
-derived status.
+members), and direct mapping to the harness plugin concept. Each
+bundle has a server-assigned UUID primary key (`skill_bundle_id`).
+Follows the same top-level pattern as Skill: versions, tags, aliases,
+and derived status.
 
 [RFC-0009: Extended Skill Bundles](https://github.com/mlflow/rfcs/pull/27)
 will add registry entries for non-skill bundle members (e.g., subagents,
@@ -586,7 +589,7 @@ pattern (RFC-0004).
 
 Version numbers are server-assigned monotonic integers. Each new
 version for a given skill receives the next integer.
-`get_latest_skill_version(name)` returns the highest version number
+`get_latest_skill_version(skill_id)` returns the highest version number
 among `active` versions if one exists, otherwise the highest version
 number among non-`deleted` non-`active` versions.
 
@@ -594,15 +597,17 @@ number among non-`deleted` non-`active` versions.
 (not manually pinnable); aliases cover the use case of pointing a
 stable name (e.g., `production`) at a specific version.
 
-The alias name `latest` is reserved: `set_skill_alias(...,
+The alias name `latest` is reserved: `set_skill_alias(skill_id, 
 alias="latest", ...)` is rejected, while
-`get_skill_version_by_alias(..., alias="latest")` is treated as a
-convenience alias for `get_latest_skill_version(...)`.
+`get_skill_version_by_alias(skill_id, alias="latest")` is treated as a
+convenience alias for `get_latest_skill_version(skill_id)`.
 
 The same rule applies to skill bundles:
-`set_skill_bundle_alias(..., alias="latest", ...)` is rejected, while
-`get_skill_bundle_version_by_alias(..., alias="latest")` delegates to
-`get_latest_skill_bundle_version(...)`.
+`set_skill_bundle_alias(skill_bundle_id, alias="latest", ...)` is
+rejected, while
+`get_skill_bundle_version_by_alias(skill_bundle_id, alias="latest")`
+delegates to
+`get_latest_skill_bundle_version(skill_bundle_id)`.
 
 This aligns with the MCP Server Registry (RFC-0004).
 
@@ -723,58 +728,11 @@ Registry (RFC-0004).
 ### UI
 
 The Skills page lives under the GenAI workflow in the MLflow sidebar,
-alongside Experiments, Prompts, MCP Servers, and AI Gateway.
-
-#### List view
-
-The list view shows skills and bundles together using a card-based
-layout modeled on the MCP Server Registry (RFC-0004). Each card
-displays:
-
-- Entity type badge (skill or bundle)
-- Name
-- Description (truncated to 2-3 lines)
-- Latest version badge (e.g., "v1")
-- Status badge with color coding: draft (gray), active (green),
-  deprecated (amber)
-- Source type indicator (Git, OCI, ZIP, MLflow)
-- Tag chips
-
-The filter bar provides:
-
-- **Type dropdown**: skill, bundle
-- **Status dropdown**: draft, active, deprecated
-- **Source type dropdown**: git, oci, zip, mlflow
-- **Search**: by name or description
-
-A "Register Skill" button (with a dropdown for bundle) initiates
-registration.
-
-#### Detail view: skills
-
-The detail view for an individual skill shows:
-
-- **Metadata section**: name, description, status,
-  workspace, source type, created by, created at, last updated
-- **Version table**: Version, Registered at, Status,
-  Source type, Created by. Clicking a version row navigates to the
-  version detail page showing source, subpath, and status.
-- **Aliases**: alias name to version mapping (e.g.,
-  `production -> 1`)
-- **Tags**: key-value list with edit controls
-- **Bundle memberships**: list of bundles that include this skill,
-  with links to each bundle's detail page
-#### Detail view: bundles
-
-The bundle detail view shows:
-
-- **Metadata section** (as above)
-- **Members table** for the selected bundle version: Name, Pinned
-  version, Source type, Status. Each row links to the member skill's
-  detail page.
-- **Version history table**: Version, Registered at, Status, Created
-  by, Member count
-- **Aliases and tags** (as above)
+alongside Experiments, Prompts, MCP Servers, and AI Gateway. It
+provides list and detail views for skills and bundles. The list view
+supports filtering by status and search by name. Detail views show
+metadata, version history, aliases, tags, and bundle memberships.
+Specific layouts and card designs will be determined through UI mocks.
 
 ### Implementation details
 
