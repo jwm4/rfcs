@@ -78,11 +78,11 @@ status, version)` supports latest-resolution lookups.
 | `alias` | `String(256)` | PK |
 | `version` | `Integer` | target version |
 
-### `skill_bundles`
+### `agent_plugins`
 
 | Column | Type | Notes |
 |--------|------|-------|
-| `skill_bundle_id` | `String(36)` | PK, server-assigned UUID |
+| `agent_plugin_id` | `String(36)` | PK, server-assigned UUID |
 | `workspace` | `String(63)` | default `'default'` |
 | `name` | `String(256)` | unique within workspace |
 | `description` | `String(5000)` | |
@@ -93,14 +93,14 @@ status, version)` supports latest-resolution lookups.
 
 UniqueConstraint: `(workspace, name)`.
 
-### `skill_bundle_versions`
+### `agent_plugin_versions`
 
 | Column | Type | Notes |
 |--------|------|-------|
-| `skill_bundle_id` | `String(36)` | PK, FK to `skill_bundles` |
+| `agent_plugin_id` | `String(36)` | PK, FK to `agent_plugins` |
 | `version` | `Integer` | PK, server-assigned monotonic integer |
 | `source_type` | `String(20)` | optional; `git`, `oci`, `zip`, `mlflow` |
-| `source` | `String(2048)` | optional pointer to bundle artifact |
+| `source` | `String(2048)` | optional pointer to agent plugin |
 | `subpath` | `String(2048)` | nullable; path within the artifact |
 | `status` | `String(20)` | default `'draft'` |
 | `created_by` | `String(256)` | |
@@ -108,51 +108,51 @@ UniqueConstraint: `(workspace, name)`.
 | `creation_timestamp` | `BigInteger` | millis since epoch |
 | `last_updated_timestamp` | `BigInteger` | millis since epoch |
 
-FK: `skill_bundle_id` references `skill_bundles`, CASCADE delete.
+FK: `agent_plugin_id` references `agent_plugins`, CASCADE delete.
 Version ordering and index follow the same pattern as
 `skill_versions`.
 
-### `skill_bundle_version_members`
+### `agent_plugin_version_members`
 
 | Column | Type | Notes |
 |--------|------|-------|
-| `skill_bundle_id` | `String(36)` | PK, FK to `skill_bundle_versions` |
-| `bundle_version` | `Integer` | PK, FK to `skill_bundle_versions` |
+| `agent_plugin_id` | `String(36)` | PK, FK to `agent_plugin_versions` |
+| `plugin_version` | `Integer` | PK, FK to `agent_plugin_versions` |
 | `member_skill_id` | `String(36)` | PK, FK to `skill_versions` |
 | `member_version` | `Integer` | PK, FK to `skill_versions` |
 | `member_subpath` | `String(2048)` | nullable; parsed from `#subpath` fragment of member URI |
 
-FK: `(skill_bundle_id, bundle_version)` references
-`skill_bundle_versions`, CASCADE delete. A FK to `skill_versions`
+FK: `(agent_plugin_id, plugin_version)` references
+`agent_plugin_versions`, CASCADE delete. A FK to `skill_versions`
 via `(member_skill_id, member_version)` enforces referential
 integrity with RESTRICT delete.
 
-### `skill_bundle_tags`
+### `agent_plugin_tags`
 
 | Column | Type | Notes |
 |--------|------|-------|
-| `skill_bundle_id` | `String(36)` | PK, FK to `skill_bundles` |
+| `agent_plugin_id` | `String(36)` | PK, FK to `agent_plugins` |
 | `key` | `String(256)` | PK |
 | `value` | `Text` | |
 
-### `skill_bundle_version_tags`
+### `agent_plugin_version_tags`
 
 | Column | Type | Notes |
 |--------|------|-------|
-| `skill_bundle_id` | `String(36)` | PK, FK to `skill_bundle_versions` |
-| `version` | `Integer` | PK, FK to `skill_bundle_versions` |
+| `agent_plugin_id` | `String(36)` | PK, FK to `agent_plugin_versions` |
+| `version` | `Integer` | PK, FK to `agent_plugin_versions` |
 | `key` | `String(256)` | PK |
 | `value` | `Text` | |
 
-### `skill_bundle_aliases`
+### `agent_plugin_aliases`
 
 | Column | Type | Notes |
 |--------|------|-------|
-| `skill_bundle_id` | `String(36)` | PK, FK to `skill_bundles` |
+| `agent_plugin_id` | `String(36)` | PK, FK to `agent_plugins` |
 | `alias` | `String(256)` | PK |
-| `version` | `Integer` | target bundle version |
+| `version` | `Integer` | target agent plugin version |
 
-**Workspace handling.** Parent entity tables (`skills`, `skill_bundles`)
+**Workspace handling.** Parent entity tables (`skills`, `agent_plugins`)
 carry a `workspace` column for scoping. Single-tenant deployments use
 `'default'`. Child tables reference the parent by UUID, so workspace is
 not repeated in child table primary keys.
@@ -164,18 +164,18 @@ not repeated in child table primary keys.
 used by the Model Registry and RFC-0004:
 
 - Top-level entity delete operations (`delete_skill` and
-  `delete_skill_bundle`) are administrative hard deletes. They
+  `delete_agent_plugin`) are administrative hard deletes. They
   physically remove the parent row and cascade to child rows, subject
   to referential-integrity checks.
 - Version delete operations (`delete_skill_version` and
-  `delete_skill_bundle_version`) are soft deletes. They set
+  `delete_agent_plugin_version`) are soft deletes. They set
   `status='deleted'` when allowed by the lifecycle transition rules,
   update `last_updated_timestamp`, remove aliases that point to the
   deleted version, and exclude the version from normal
   get/search/list/latest resolution. Active versions must first be
   unpublished or deprecated before they can be deleted.
 - The `deleted` status is terminal. Internal audit or provenance paths
-  may retain enough metadata to explain historical bundle
+  may retain enough metadata to explain historical agent plugin
   snapshots, but deleted versions are not surfaced to consumers.
 
 ## Entity dataclasses
@@ -255,7 +255,7 @@ class SkillVersion:
 | `version` | `int` | Server-assigned monotonic integer. Each new version receives the next integer |
 | `name` | `str` | Denormalized from parent Skill for convenience in responses |
 | `source_type` | `SkillSourceType` | Server-inferred distribution mechanism: `git`, `oci`, `zip`, `mlflow`. Inferred from the `source` URL scheme |
-| `source` | `str` | Pointer to the content in the source system. Required for standalone pull. May be omitted only when the version's content lives within a bundle-level artifact, in which case the containing bundle membership identifies the embedded content path |
+| `source` | `str` | Pointer to the content in the source system. Required for standalone pull. May be omitted only when the version's content lives within an agent plugin-level artifact, in which case the containing agent plugin membership identifies the embedded content path |
 | `subpath` | `str` | Optional path within the artifact where this skill's content lives. See subpath usage table below |
 | `status` | `SkillStatus` | Per-version lifecycle: `draft`, `active`, `deprecated`, `deleted` |
 | `aliases` | `list[str]` | Alias names currently pointing at this version (read-only, projected from alias table) |
@@ -337,22 +337,22 @@ and `version` are immutable after creation. To point
 to different content, register a new version. Mutable fields
 (`status`, `tags`) can be updated independently.
 
-### SkillBundle entity
+### AgentPlugin entity
 
-A skill bundle groups related skills into a governed unit that maps
+An agent plugin groups related skills into a governed unit that maps
 to the "plugin" concept in agent harnesses. Follows the same
 top-level pattern as Skill: versions, tags, and aliases.
 
 ```python
 @dataclass
-class SkillBundle:
-    skill_bundle_id: str  # server-assigned UUID
+class AgentPlugin:
+    agent_plugin_id: str  # server-assigned UUID
     name: str
     description: str | None = None
     workspace: str | None = None
     status: SkillStatus | None = None  # read-only, derived from parent-resolved version
     tags: dict[str, str] = field(default_factory=dict)
-    aliases: dict[str, int] = field(default_factory=dict)  # read-only; populated from skill_bundle_aliases table
+    aliases: dict[str, int] = field(default_factory=dict)  # read-only; populated from agent_plugin_aliases table
     latest_version: int | None = None  # read-only, shared latest-resolution rule
     created_by: str | None = None
     last_updated_by: str | None = None
@@ -360,31 +360,31 @@ class SkillBundle:
     last_updated_timestamp: int | None = None
 ```
 
-`SkillBundle.status` is read-only and uses the same parent-resolved
+`AgentPlugin.status` is read-only and uses the same parent-resolved
 version rule as `Skill`: highest active version number if present,
 otherwise highest non-deleted non-active version number. Latest
 version resolution follows the same fallback.
 
-### SkillBundleVersion entity
+### AgentPluginVersion entity
 
-A versioned snapshot of a skill bundle's membership. In this RFC, all
+A versioned snapshot of an agent plugin's membership. In this RFC, all
 members are skills.
 
-Bundle members are referenced by URI string rather than a separate
+Agent plugin members are referenced by URI string rather than a separate
 data class. The URI format follows MLflow's `models:/name/version`
 convention:
 
 - `skills:/name/version` pins a specific version
 - `skills:/name@alias` resolves through an alias
 - `skills:/name/version#subpath` identifies an embedded skill inside
-  a monolithic bundle artifact (subpath relative to the bundle root)
+  a monolithic agent plugin artifact (subpath relative to the agent plugin root)
 
 ```python
 @dataclass
-class SkillBundleVersion:
-    skill_bundle_id: str  # FK to SkillBundle
+class AgentPluginVersion:
+    agent_plugin_id: str  # FK to AgentPlugin
     version: int
-    name: str | None = None  # denormalized from parent SkillBundle for convenience
+    name: str | None = None  # denormalized from parent AgentPlugin for convenience
     source_type: SkillSourceType | None = None
     source: str | None = None
     subpath: str | None = None
@@ -400,48 +400,48 @@ class SkillBundleVersion:
     last_updated_timestamp: int | None = None
 ```
 
-### SkillBundleVersion field details
+### AgentPluginVersion field details
 
-**Version uniqueness.** The combination of `(skill_bundle_id, version)`
+**Version uniqueness.** The combination of `(agent_plugin_id, version)`
 is unique.
 
-**Bundle-level source.** A bundle version is either monolithic or
+**Agent plugin-level source.** An agent plugin version is either monolithic or
 assembled, never both:
 
 - **Monolithic:** has its own `source_type`, `source`, and `subpath`,
   pointing to a single artifact (e.g., an OCI
-  image or Git repo) that contains the complete bundle. `pull`
-  fetches the bundle artifact as a unit. Member skill versions may
-  omit their own `source` because the bundle artifact is the
+  image or Git repo) that contains the complete agent plugin. `pull`
+  fetches the agent plugin as a unit. Member skill versions may
+  omit their own `source` because the agent plugin is the
   authoritative source. Every source-less member must include a
   `#subpath` fragment in its URI identifying where it lives inside
-  the bundle artifact (e.g., `skills:/name/1#skills/name`).
+  the agent plugin (e.g., `skills:/name/1#skills/name`).
 - **Assembled:** has individual member references. Each skill member
   has its own source. `pull` fetches members individually. If a skill
   member has no source, `pull` fails rather than producing a partial
-  local bundle. For assembled bundles, member URIs must not include
+  local agent plugin. For assembled agent plugins, member URIs must not include
   a `#subpath` fragment because the member's own `source` and
   `subpath` identify its content.
 
 The API rejects a member URI with a `#subpath` fragment when the
 member version has its own source. It also rejects a source-less member
-of a monolithic bundle when the URI lacks a `#subpath` fragment.
+of a monolithic agent plugin when the URI lacks a `#subpath` fragment.
 
-**Immutability contract.** The member list and source fields of a
-bundle version are immutable after creation. To change the set of
-members or source pointer, register a new bundle version. Mutable
+**Immutability contract.** The member list and source fields of an
+agent plugin version are immutable after creation. To change the set of
+members or source pointer, register a new agent plugin version. Mutable
 fields (`status`, `tags`) can be updated independently.
 
 Correctness of the artifact layout is the publisher's responsibility;
 the registry does not validate artifact contents at registration time.
 
-A member can appear in multiple bundles and multiple bundle versions.
-Membership is at the version level, so a bundle version is a
+A member can appear in multiple agent plugins and multiple agent plugin versions.
+Membership is at the version level, so an agent plugin version is a
 reproducible snapshot of "these specific skill versions work together."
 
 ### Skill URI format
 
-Skill URIs are used for CLI target identification and bundle
+Skill URIs are used for CLI target identification and agent plugin
 member lists, following the `models:/name/version` convention
 established by MLflow's Model Registry. The Python SDK and REST
 API continue to use separate `name`, `version`, and `alias`
@@ -452,11 +452,11 @@ parameters for primary resource identification.
 | `skills:/name` | Identify a skill (name only) | `skills:/code-review` |
 | `skills:/name/version` | Pin a specific version | `skills:/code-review/1` |
 | `skills:/name@alias` | Resolve through an alias | `skills:/code-review@production` |
-| `skills:/name/version#subpath` | Embedded skill inside a monolithic bundle | `skills:/review/1#skills/review` |
+| `skills:/name/version#subpath` | Embedded skill inside a monolithic agent plugin | `skills:/review/1#skills/review` |
 
-In the CLI, every command that targets a skill or bundle accepts a
+In the CLI, every command that targets a skill or agent plugin accepts a
 `--skill-uri` flag (parallel to `--model-uri` in `mlflow models`).
-In bundle member lists, URIs appear as plain strings in `list[str]`.
+In agent plugin member lists, URIs appear as plain strings in `list[str]`.
 The server parses the URI into its constituent fields (`member_name`,
 `member_version`, `member_subpath`) for storage and validation. Alias
 URIs are resolved to a concrete version at the time of the API call.
@@ -595,126 +595,126 @@ class SkillRegistryMixin:
     ) -> None:
         raise NotImplementedError(self.__class__.__name__)
 
-    # --- SkillBundle operations ---
+    # --- AgentPlugin operations ---
 
-    def create_skill_bundle(
+    def create_agent_plugin(
         self, name: str,
         description: str | None = None,
-    ) -> SkillBundle:
+    ) -> AgentPlugin:
         raise NotImplementedError(self.__class__.__name__)
 
-    def get_skill_bundle(self, skill_bundle_id: str) -> SkillBundle:
+    def get_agent_plugin(self, agent_plugin_id: str) -> AgentPlugin:
         raise NotImplementedError(self.__class__.__name__)
 
-    def search_skill_bundles(
+    def search_agent_plugins(
         self,
         filter_string: str | None = None,
         max_results: int = SEARCH_MAX_RESULTS_DEFAULT,
         order_by: list[str] | None = None,
         page_token: str | None = None,
-    ) -> PagedList[SkillBundle]:
+    ) -> PagedList[AgentPlugin]:
         raise NotImplementedError(self.__class__.__name__)
 
-    def update_skill_bundle(
+    def update_agent_plugin(
         self,
-        skill_bundle_id: str,
+        agent_plugin_id: str,
         description: str | None = NOT_SET,
-    ) -> SkillBundle:
+    ) -> AgentPlugin:
         raise NotImplementedError(self.__class__.__name__)
 
-    def delete_skill_bundle(self, skill_bundle_id: str) -> None:
+    def delete_agent_plugin(self, agent_plugin_id: str) -> None:
         raise NotImplementedError(self.__class__.__name__)
 
-    # --- SkillBundleVersion operations ---
+    # --- AgentPluginVersion operations ---
 
-    def create_skill_bundle_version(
+    def create_agent_plugin_version(
         self,
-        skill_bundle_id: str,
+        agent_plugin_id: str,
         skills: list[str] | None = None,
         source_type: str | None = None,
         source: str | None = None,
         subpath: str | None = None,
-    ) -> SkillBundleVersion:
+    ) -> AgentPluginVersion:
         raise NotImplementedError(self.__class__.__name__)
 
-    def get_skill_bundle_version(
-        self, skill_bundle_id: str, version: int,
-    ) -> SkillBundleVersion:
+    def get_agent_plugin_version(
+        self, agent_plugin_id: str, version: int,
+    ) -> AgentPluginVersion:
         raise NotImplementedError(self.__class__.__name__)
 
-    def get_skill_bundle_version_by_alias(
-        self, skill_bundle_id: str, alias: str,
-    ) -> SkillBundleVersion:
+    def get_agent_plugin_version_by_alias(
+        self, agent_plugin_id: str, alias: str,
+    ) -> AgentPluginVersion:
         raise NotImplementedError(self.__class__.__name__)
 
-    def get_latest_skill_bundle_version(
-        self, skill_bundle_id: str,
-    ) -> SkillBundleVersion:
+    def get_latest_agent_plugin_version(
+        self, agent_plugin_id: str,
+    ) -> AgentPluginVersion:
         raise NotImplementedError(self.__class__.__name__)
 
-    def search_skill_bundle_versions(
+    def search_agent_plugin_versions(
         self,
-        skill_bundle_id: str,
+        agent_plugin_id: str,
         filter_string: str | None = None,
         max_results: int = SEARCH_MAX_RESULTS_DEFAULT,
         order_by: list[str] | None = None,
         page_token: str | None = None,
-    ) -> PagedList[SkillBundleVersion]:
+    ) -> PagedList[AgentPluginVersion]:
         raise NotImplementedError(self.__class__.__name__)
 
-    def update_skill_bundle_version(
+    def update_agent_plugin_version(
         self,
-        skill_bundle_id: str,
+        agent_plugin_id: str,
         version: int,
         status: SkillStatus | None = NOT_SET,
-    ) -> SkillBundleVersion:
+    ) -> AgentPluginVersion:
         raise NotImplementedError(self.__class__.__name__)
 
-    def delete_skill_bundle_version(
-        self, skill_bundle_id: str, version: int,
+    def delete_agent_plugin_version(
+        self, agent_plugin_id: str, version: int,
     ) -> None:
         raise NotImplementedError(self.__class__.__name__)
 
-    # --- SkillBundle tag operations ---
+    # --- AgentPlugin tag operations ---
 
-    def set_skill_bundle_tag(
-        self, skill_bundle_id: str, key: str, value: str,
+    def set_agent_plugin_tag(
+        self, agent_plugin_id: str, key: str, value: str,
     ) -> None:
         raise NotImplementedError(self.__class__.__name__)
 
-    def delete_skill_bundle_tag(
-        self, skill_bundle_id: str, key: str,
+    def delete_agent_plugin_tag(
+        self, agent_plugin_id: str, key: str,
     ) -> None:
         raise NotImplementedError(self.__class__.__name__)
 
-    def set_skill_bundle_version_tag(
-        self, skill_bundle_id: str, version: int,
+    def set_agent_plugin_version_tag(
+        self, agent_plugin_id: str, version: int,
         key: str, value: str,
     ) -> None:
         raise NotImplementedError(self.__class__.__name__)
 
-    def delete_skill_bundle_version_tag(
-        self, skill_bundle_id: str, version: int, key: str,
+    def delete_agent_plugin_version_tag(
+        self, agent_plugin_id: str, version: int, key: str,
     ) -> None:
         raise NotImplementedError(self.__class__.__name__)
 
-    # --- SkillBundle alias operations ---
+    # --- AgentPlugin alias operations ---
 
-    def set_skill_bundle_alias(
-        self, skill_bundle_id: str, alias: str, version: int,
+    def set_agent_plugin_alias(
+        self, agent_plugin_id: str, alias: str, version: int,
     ) -> None:
         raise NotImplementedError(self.__class__.__name__)
 
-    def delete_skill_bundle_alias(
-        self, skill_bundle_id: str, alias: str,
+    def delete_agent_plugin_alias(
+        self, agent_plugin_id: str, alias: str,
     ) -> None:
         raise NotImplementedError(self.__class__.__name__)
 ```
 
-The alias name `latest` is reserved for both skills and skill bundles.
+The alias name `latest` is reserved for both skills and agent plugins.
 The corresponding `set_*_alias()` methods reject it. Alias lookup with
 `latest` delegates to `get_latest_skill_version()` or
-`get_latest_skill_bundle_version()` rather than reading a stored alias
+`get_latest_agent_plugin_version()` rather than reading a stored alias
 row.
 
 For update fields, omitting a parameter leaves the stored value
@@ -722,7 +722,7 @@ unchanged, while passing `None` to a nullable field explicitly sets
 the field to `null`.
 
 All store methods that identify a specific entity use the UUID
-(`skill_id` or `skill_bundle_id`) rather than name. Name-based
+(`skill_id` or `agent_plugin_id`) rather than name. Name-based
 lookups are provided at the SDK layer via `search_skills()` with a
 name filter.
 
@@ -828,76 +828,76 @@ def update_skill_version(
 def delete_skill_version(*, skill_id: str, version: int) -> None: ...
 
 
-def create_skill_bundle(
+def create_agent_plugin(
     *,
     name: str,
     description: str | None = None,
-) -> SkillBundle: ...
+) -> AgentPlugin: ...
 
 
-def create_skill_bundle_version(
+def create_agent_plugin_version(
     *,
-    skill_bundle_id: str,
+    agent_plugin_id: str,
     skills: list[str] | None = None,
     source: str | None = None,
     subpath: str | None = None,
-) -> SkillBundleVersion: ...
+) -> AgentPluginVersion: ...
 
 
-def get_skill_bundle(*, skill_bundle_id: str) -> SkillBundle: ...
+def get_agent_plugin(*, agent_plugin_id: str) -> AgentPlugin: ...
 
 
-def search_skill_bundles(
+def search_agent_plugins(
     *,
     filter_string: str | None = None,
     max_results: int = 100,
     order_by: list[str] | None = None,
     page_token: str | None = None,
-) -> PagedList[SkillBundle]: ...
+) -> PagedList[AgentPlugin]: ...
 
 
-def update_skill_bundle(
+def update_agent_plugin(
     *,
-    skill_bundle_id: str,
+    agent_plugin_id: str,
     description: str | None = NOT_SET,
-) -> SkillBundle: ...
+) -> AgentPlugin: ...
 
 
-def delete_skill_bundle(*, skill_bundle_id: str) -> None: ...
+def delete_agent_plugin(*, agent_plugin_id: str) -> None: ...
 
 
-def get_skill_bundle_version(
-    *, skill_bundle_id: str, version: int,
-) -> SkillBundleVersion: ...
+def get_agent_plugin_version(
+    *, agent_plugin_id: str, version: int,
+) -> AgentPluginVersion: ...
 
 
-def get_skill_bundle_version_by_alias(
-    *, skill_bundle_id: str, alias: str,
-) -> SkillBundleVersion: ...
+def get_agent_plugin_version_by_alias(
+    *, agent_plugin_id: str, alias: str,
+) -> AgentPluginVersion: ...
 
 
-def get_latest_skill_bundle_version(*, skill_bundle_id: str) -> SkillBundleVersion: ...
+def get_latest_agent_plugin_version(*, agent_plugin_id: str) -> AgentPluginVersion: ...
 
 
-def search_skill_bundle_versions(
+def search_agent_plugin_versions(
     *,
-    skill_bundle_id: str,
+    agent_plugin_id: str,
     filter_string: str | None = None,
     max_results: int = 100,
     order_by: list[str] | None = None,
     page_token: str | None = None,
-) -> PagedList[SkillBundleVersion]: ...
+) -> PagedList[AgentPluginVersion]: ...
 
 
-def update_skill_bundle_version(
+def update_agent_plugin_version(
     *,
-    skill_bundle_id: str,
+    agent_plugin_id: str,
     version: int,
     status: str | None = NOT_SET,
-) -> SkillBundleVersion: ...
+) -> AgentPluginVersion: ...
 
 
-def delete_skill_bundle_version(*, skill_bundle_id: str, version: int) -> None: ...
+def delete_agent_plugin_version(*, agent_plugin_id: str, version: int) -> None: ...
 
 
 def set_skill_tag(*, skill_id: str, key: str, value: str) -> None: ...
@@ -912,17 +912,17 @@ def set_skill_alias(*, skill_id: str, alias: str, version: int) -> None: ...
 
 def delete_skill_alias(*, skill_id: str, alias: str) -> None: ...
 
-def set_skill_bundle_tag(*, skill_bundle_id: str, key: str, value: str) -> None: ...
+def set_agent_plugin_tag(*, agent_plugin_id: str, key: str, value: str) -> None: ...
 
-def delete_skill_bundle_tag(*, skill_bundle_id: str, key: str) -> None: ...
+def delete_agent_plugin_tag(*, agent_plugin_id: str, key: str) -> None: ...
 
-def set_skill_bundle_version_tag(*, skill_bundle_id: str, version: int, key: str, value: str) -> None: ...
+def set_agent_plugin_version_tag(*, agent_plugin_id: str, version: int, key: str, value: str) -> None: ...
 
-def delete_skill_bundle_version_tag(*, skill_bundle_id: str, version: int, key: str) -> None: ...
+def delete_agent_plugin_version_tag(*, agent_plugin_id: str, version: int, key: str) -> None: ...
 
-def set_skill_bundle_alias(*, skill_bundle_id: str, alias: str, version: int) -> None: ...
+def set_agent_plugin_alias(*, agent_plugin_id: str, alias: str, version: int) -> None: ...
 
-def delete_skill_bundle_alias(*, skill_bundle_id: str, alias: str) -> None: ...
+def delete_agent_plugin_alias(*, agent_plugin_id: str, alias: str) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -940,19 +940,19 @@ class IntrospectedSkill:
 
 @dataclass
 class PluginIntrospectionResult:
-    bundle_name: str | None
+    plugin_name: str | None
     skills: list[IntrospectedSkill]
     warnings: list[PluginImportWarning]
 
 
 @dataclass
 class PluginImportResult:
-    bundle_version: SkillBundleVersion
+    plugin_version: AgentPluginVersion
     skill_versions: list[SkillVersion]
     warnings: list[PluginImportWarning]
 
 
-def introspect_bundle(
+def introspect_plugin(
     *,
     source: str,
     subpath: str | None = None,
@@ -960,19 +960,19 @@ def introspect_bundle(
     """Inspect a local or remote plugin without modifying the registry."""
 
 
-def import_bundle(
+def import_plugin(
     *,
     source: str,
-    bundle_name: str | None = None,
+    plugin_name: str | None = None,
     subpath: str | None = None,
 ) -> PluginImportResult:
-    """Import a plugin as a monolithic bundle.
+    """Import a plugin as a monolithic agent plugin.
 
     Discovers skill directories (subdirectories containing a SKILL.md
     entry point), registers them, preserves the plugin source on the
-    bundle version, and returns warnings for non-skill content that is
-    included in the bundle but does not receive individual registry
-    entries. If bundle_name is omitted, it is inferred from the source
+    agent plugin version, and returns warnings for non-skill content that is
+    included in the agent plugin but does not receive individual registry
+    entries. If plugin_name is omitted, it is inferred from the source
     directory name. The server infers source_type from the URL scheme.
     """
 
@@ -980,14 +980,14 @@ def import_bundle(
 def pull(
     *,
     skill_id: str | None = None,
-    skill_bundle_id: str | None = None,
+    agent_plugin_id: str | None = None,
     version: int | None = None,
     alias: str | None = None,
     destination: str = ".",
 ) -> str:
-    """Pull skill or bundle content from registered sources to a
+    """Pull skill or agent plugin content from registered sources to a
     local directory. Specify skill_id for a single skill or
-    skill_bundle_id for a skill bundle."""
+    agent_plugin_id for an agent plugin."""
 
 
 # Example usage:
@@ -1022,8 +1022,8 @@ SKILL.md entry point. The server always infers `source_type` from the
 `source` value: `.git` suffix or `git://` scheme = git, `oci://` = oci,
 `.zip` = zip, and null `source` = mlflow (content stored in MLflow
 artifact storage). The one exception is embedded skills created during
-bundle import, where the importer sets `source_type`, `source`, and
-`subpath` all to null because the content lives inside the bundle
+agent plugin import, where the importer sets `source_type`, `source`, and
+`subpath` all to null because the content lives inside the agent plugin
 artifact rather than in standalone storage. `source_type` is not a
 user-facing parameter. This keeps
 SDKs as thin REST wrappers, avoids reimplementing inference in every
@@ -1060,33 +1060,33 @@ All paths relative to the logical skills router prefix.
 | `GET` | `/{skill_id}/aliases/{alias}` | Resolve alias to `SkillVersion` |
 | `DELETE` | `/{skill_id}/aliases/{alias}` | Delete an alias |
 
-Similarly, skill bundle endpoints are exposed under both
-`/api/3.0/mlflow/skill-bundles` and
-`/ajax-api/3.0/mlflow/skill-bundles`.
+Similarly, agent plugin endpoints are exposed under both
+`/api/3.0/mlflow/agent-plugins` and
+`/ajax-api/3.0/mlflow/agent-plugins`.
 
-### Skill bundle endpoints
+### Agent plugin endpoints
 
-All paths relative to the logical skill-bundles router prefix.
+All paths relative to the logical agent-plugins router prefix.
 
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/` | Create a skill bundle |
-| `GET` | `/` | Search skill bundles |
-| `GET` | `/{skill_bundle_id}` | Get bundle by ID |
-| `PATCH` | `/{skill_bundle_id}` | Update bundle fields |
-| `DELETE` | `/{skill_bundle_id}` | Hard-delete bundle (cascades versions and memberships) |
-| `POST` | `/{skill_bundle_id}/versions` | Create a bundle version with members |
-| `GET` | `/{skill_bundle_id}/versions` | Search bundle versions |
-| `GET` | `/{skill_bundle_id}/versions/{version}` | Get a specific bundle version |
-| `PATCH` | `/{skill_bundle_id}/versions/{version}` | Update bundle version status |
-| `DELETE` | `/{skill_bundle_id}/versions/{version}` | Soft-delete a bundle version (`status='deleted'`) |
-| `POST` | `/{skill_bundle_id}/tags` | Set a bundle-level tag |
-| `DELETE` | `/{skill_bundle_id}/tags/{key}` | Delete a bundle-level tag |
-| `POST` | `/{skill_bundle_id}/versions/{version}/tags` | Set a bundle version tag |
-| `DELETE` | `/{skill_bundle_id}/versions/{version}/tags/{key}` | Delete a bundle version tag |
-| `POST` | `/{skill_bundle_id}/aliases` | Set a bundle alias |
-| `GET` | `/{skill_bundle_id}/aliases/{alias}` | Resolve bundle alias to version |
-| `DELETE` | `/{skill_bundle_id}/aliases/{alias}` | Delete a bundle alias |
+| `POST` | `/` | Create an agent plugin |
+| `GET` | `/` | Search agent plugins |
+| `GET` | `/{agent_plugin_id}` | Get agent plugin by ID |
+| `PATCH` | `/{agent_plugin_id}` | Update agent plugin fields |
+| `DELETE` | `/{agent_plugin_id}` | Hard-delete agent plugin (cascades versions and memberships) |
+| `POST` | `/{agent_plugin_id}/versions` | Create an agent plugin version with members |
+| `GET` | `/{agent_plugin_id}/versions` | Search agent plugin versions |
+| `GET` | `/{agent_plugin_id}/versions/{version}` | Get a specific agent plugin version |
+| `PATCH` | `/{agent_plugin_id}/versions/{version}` | Update agent plugin version status |
+| `DELETE` | `/{agent_plugin_id}/versions/{version}` | Soft-delete an agent plugin version (`status='deleted'`) |
+| `POST` | `/{agent_plugin_id}/tags` | Set an agent plugin-level tag |
+| `DELETE` | `/{agent_plugin_id}/tags/{key}` | Delete an agent plugin-level tag |
+| `POST` | `/{agent_plugin_id}/versions/{version}/tags` | Set an agent plugin version tag |
+| `DELETE` | `/{agent_plugin_id}/versions/{version}/tags/{key}` | Delete an agent plugin version tag |
+| `POST` | `/{agent_plugin_id}/aliases` | Set an agent plugin alias |
+| `GET` | `/{agent_plugin_id}/aliases/{alias}` | Resolve agent plugin alias to version |
+| `DELETE` | `/{agent_plugin_id}/aliases/{alias}` | Delete an agent plugin alias |
 
 ### Pagination and filtering
 
@@ -1096,8 +1096,8 @@ expressions following existing MLflow conventions.
 **Skills:** `name LIKE '%review%'`, `status = 'active'`,
 `tags.team = 'platform'`
 
-**Bundles:** Same as skills, plus `member_name = 'code-review'` to
-find bundles that include a given skill (reverse membership lookup)
+**Agent plugins:** Same as skills, plus `member_name = 'code-review'` to
+find agent plugins that include a given skill (reverse membership lookup)
 
 **Versions (all entity types):** `status = 'active'`,
 `source_type = 'git'`, `tags.approved = 'true'`
@@ -1134,22 +1134,22 @@ class UpdateSkillVersionRequest(BaseModel):
     status: str | None = None
 
 
-class CreateSkillBundleRequest(BaseModel):
+class CreateAgentPluginRequest(BaseModel):
     name: str
     description: str | None = None
 
 
-class UpdateSkillBundleRequest(BaseModel):
+class UpdateAgentPluginRequest(BaseModel):
     description: str | None = None
 
 
-class CreateSkillBundleVersionRequest(BaseModel):
+class CreateAgentPluginVersionRequest(BaseModel):
     skills: list[str] | None = None
     source: str | None = None
     subpath: str | None = None
 
 
-class UpdateSkillBundleVersionRequest(BaseModel):
+class UpdateAgentPluginVersionRequest(BaseModel):
     status: str | None = None
 
 
@@ -1198,8 +1198,8 @@ class SkillResponse(BaseModel):
     last_updated_timestamp: int | None = None
 
 
-class SkillBundleVersionResponse(BaseModel):
-    skill_bundle_id: str
+class AgentPluginVersionResponse(BaseModel):
+    agent_plugin_id: str
     version: int
     name: str | None = None
     source_type: str | None = None
@@ -1215,8 +1215,8 @@ class SkillBundleVersionResponse(BaseModel):
     last_updated_timestamp: int | None = None
 
 
-class SkillBundleResponse(BaseModel):
-    skill_bundle_id: str
+class AgentPluginResponse(BaseModel):
+    agent_plugin_id: str
     name: str
     description: str | None = None
     status: str | None = None
@@ -1234,7 +1234,7 @@ for convenience, while REST responses expose aliases as
 `list[AliasResponse]` to keep the payload shape explicit and
 consistent with the MCP Server Registry (RFC-0004).
 
-**UUID primary keys.** Skills and skill bundles use server-assigned
+**UUID primary keys.** Skills and agent plugins use server-assigned
 UUIDs as primary keys, following the pattern established by
 `GatewayEndpoint`. The `name` field is unique within a workspace
 (enforced by a unique constraint), so entities can be looked up by
@@ -1249,7 +1249,7 @@ delegating to `MlflowClient`, plus client-side import and pull
 operations that compose those registry functions. Skill-specific entity and request types are also re-exported
 from `mlflow.genai`. The `mlflow skills` CLI command group
 provides the same operations from the command line. CLI commands
-accept `--skill-id` or `--skill-bundle-id` flags for entity
+accept `--skill-id` or `--agent-plugin-id` flags for entity
 identification, and `--skill-uri` as a convenience that resolves
 names and aliases to UUIDs:
 
@@ -1263,17 +1263,17 @@ names and aliases to UUIDs:
 | `mlflow skills set-alias` | `set_skill_alias()` | Set a version alias |
 | `mlflow skills set-tag` | `set_skill_tag()` | Set a tag |
 | `mlflow skills pull` | `pull()` | Pull content to local filesystem |
-| `mlflow skills bundles create` | `create_skill_bundle()` | Create a skill bundle |
-| `mlflow skills bundles create-version` | `create_skill_bundle_version()` | Create a bundle version with members |
-| `mlflow skills bundles get` | `get_skill_bundle()` | Get bundle metadata |
-| `mlflow skills bundles search` | `search_skill_bundles()` | Search bundles |
-| `mlflow skills bundles search-versions` | `search_skill_bundle_versions()` | Search bundle versions |
-| `mlflow skills bundles set-alias` | `set_skill_bundle_alias()` | Set a bundle alias |
-| `mlflow skills bundles set-tag` | `set_skill_bundle_tag()` | Set a bundle-level tag |
-| `mlflow skills bundles set-version-tag` | `set_skill_bundle_version_tag()` | Set a bundle version tag |
-| `mlflow skills bundles update-version` | `update_skill_bundle_version()` | Update bundle version status |
-| `mlflow skills bundles introspect` | `introspect_bundle()` | Preview a local or remote plugin without registry writes |
-| `mlflow skills bundles import` | `import_bundle()` | Import a plugin as a monolithic bundle |
+| `mlflow agent-plugins create` | `create_agent_plugin()` | Create an agent plugin |
+| `mlflow agent-plugins create-version` | `create_agent_plugin_version()` | Create an agent plugin version with members |
+| `mlflow agent-plugins get` | `get_agent_plugin()` | Get agent plugin metadata |
+| `mlflow agent-plugins search` | `search_agent_plugins()` | Search agent plugins |
+| `mlflow agent-plugins search-versions` | `search_agent_plugin_versions()` | Search agent plugin versions |
+| `mlflow agent-plugins set-alias` | `set_agent_plugin_alias()` | Set an agent plugin alias |
+| `mlflow agent-plugins set-tag` | `set_agent_plugin_tag()` | Set an agent plugin-level tag |
+| `mlflow agent-plugins set-version-tag` | `set_agent_plugin_version_tag()` | Set an agent plugin version tag |
+| `mlflow agent-plugins update-version` | `update_agent_plugin_version()` | Update agent plugin version status |
+| `mlflow agent-plugins introspect` | `introspect_plugin()` | Preview a local or remote plugin without registry writes |
+| `mlflow agent-plugins import` | `import_plugin()` | Import a plugin as a monolithic agent plugin |
 
 **Relationship to existing `mlflow skills` subcommands.** MLflow already
 has `mlflow skills list` and `mlflow skills view` subcommands
@@ -1286,12 +1286,12 @@ The registry's subcommands use different names (e.g., `register`,
 
 Plugin import is implemented in the SDK and CLI layer. There is no
 dedicated REST import endpoint: the client fetches and inspects the
-source locally, then calls the existing skill and bundle creation APIs.
+source locally, then calls the existing skill and agent plugin creation APIs.
 The registry server does not fetch user-supplied plugin URLs.
 
 ### Read-only preview
 
-`introspect_bundle()` and `mlflow skills bundles introspect` run the same plugin
+`introspect_plugin()` and `mlflow agent-plugins introspect` run the same plugin
 discovery used by import but do not create or modify registry records.
 They accept either a local path or a remote Git, OCI, ZIP, or MLflow
 artifact source and return the discovered skill names and paths,
@@ -1309,14 +1309,14 @@ by Claude Code and other harnesses. The importer:
    source-type-aware logic as `pull`.
 2. Applies `subpath`, when provided, to select the plugin root.
 3. Reads `.claude-plugin/plugin.json` when present to obtain supported
-   plugin metadata such as name. An explicit `bundle_name` argument
+   plugin metadata such as name. An explicit `plugin_name` argument
    takes precedence. Version is server-assigned at import time.
 4. Discovers skill directories that contain a SKILL.md entry point.
    The SKILL.md name is used when present; otherwise the directory
    name is used.
 5. Detects non-skill content for warning purposes only.
 
-The resulting bundle name must be available after explicit
+The resulting agent plugin name must be available after explicit
 arguments and plugin metadata are considered. The version is
 server-assigned. The server infers `source_type` from the source
 value using the same rules as registration.
@@ -1330,7 +1330,7 @@ directory as the `#subpath` fragment in the member URI (e.g.,
 `skills:/embedded-review/1#skills/embedded-review`).
 
 After registering the embedded skills, the importer creates one
-monolithic `SkillBundleVersion` with the original `source_type`,
+monolithic `AgentPluginVersion` with the original `source_type`,
 `source`, and `subpath`, plus member references for all discovered
 skills. This preserves a pullable link to the complete original plugin
 while keeping registry entries limited to skills.
@@ -1347,14 +1347,14 @@ Subagents, hooks, MCP configurations, and unrecognized content remain
 in the plugin artifact but are not registered. Each discovered skipped
 category produces a `PluginImportWarning` containing its category,
 path, and an explanation that this RFC does not create registry entries
-for non-skill content (though the content remains in the bundle). The CLI
+for non-skill content (though the content remains in the agent plugin). The CLI
 prints these warnings after registration. The SDK returns them together
-with the created bundle and skill versions in `PluginImportResult`.
+with the created agent plugin and skill versions in `PluginImportResult`.
 
 Import translates an existing plugin into MLflow's registry
 representation, creating registry entries for discovered skills while
 preserving the complete plugin source. It does not install the plugin,
-translate an MLflow bundle into a downstream bundle format.
+translate an MLflow agent plugin into a downstream agent plugin format.
 
 ## Pull semantics details
 
@@ -1364,7 +1364,7 @@ has been deleted, pull fails with an error that surfaces the
 underlying failure from the source system (e.g., Git clone failure,
 OCI pull 404, HTTP download error, MLflow artifact download error).
 Source availability is the publisher's responsibility. For assembled
-bundle pulls, if one member's source is unavailable, the entire pull
+agent plugin pulls, if one member's source is unavailable, the entire pull
 fails rather than producing a partial result.
 
 **Source authentication.** The registry server stores source pointers
@@ -1402,25 +1402,25 @@ mlflow.genai.register_skill(
     subpath="skills/test-coverage",
 )
 
-# Assembled bundle: each member has its own source
-bundle = mlflow.genai.create_skill_bundle(name="pr-workflow")
-bundle_version = mlflow.genai.create_skill_bundle_version(
-    skill_bundle_id=bundle.skill_bundle_id,
+# Assembled agent plugin: each member has its own source
+plugin = mlflow.genai.create_agent_plugin(name="pr-workflow")
+plugin_version = mlflow.genai.create_agent_plugin_version(
+    agent_plugin_id=plugin.agent_plugin_id,
     skills=[
         "skills:/code-review/1",
         "skills:/test-coverage/1",
     ],
 )
 
-# Monolithic bundle from a single OCI image. Embedded member
+# Monolithic agent plugin from a single OCI image. Embedded member
 # versions are registered without their own sources.
 mlflow.genai.register_skill(
     name="embedded-review",
 )
 
-mono_bundle = mlflow.genai.create_skill_bundle(name="pr-workflow-mono")
-bundle_version = mlflow.genai.create_skill_bundle_version(
-    skill_bundle_id=mono_bundle.skill_bundle_id,
+mono_plugin = mlflow.genai.create_agent_plugin(name="pr-workflow-mono")
+plugin_version = mlflow.genai.create_agent_plugin_version(
+    agent_plugin_id=mono_plugin.agent_plugin_id,
     source="oci://ghcr.io/acme/agent-plugin:v1.0.0",
     skills=[
         "skills:/embedded-review/1#skills/embedded-review",
@@ -1441,8 +1441,8 @@ versions = mlflow.genai.search_skill_versions(
     filter_string="status = 'active'",
 )
 
-# Search for active skill bundles
-bundles = mlflow.genai.search_skill_bundles(
+# Search for active agent plugins
+plugins = mlflow.genai.search_agent_plugins(
     filter_string="status = 'active'",
 )
 
@@ -1461,19 +1461,19 @@ version = mlflow.genai.get_skill_version_by_alias(
     alias="production",
 )
 
-# Get a bundle version and its pinned members
-bundle = mlflow.genai.search_skill_bundles(
+# Get an agent plugin version and its pinned members
+plugin = mlflow.genai.search_agent_plugins(
     filter_string="name = 'pr-workflow'",
 )[0]
-bundle_version = mlflow.genai.get_skill_bundle_version(
-    skill_bundle_id=bundle.skill_bundle_id,
+plugin_version = mlflow.genai.get_agent_plugin_version(
+    agent_plugin_id=plugin.agent_plugin_id,
     version=1,
 )
-# bundle_version.skills == ["skills:/code-review/1", ...]
+# plugin_version.skills == ["skills:/code-review/1", ...]
 
-# Resolve a bundle alias
-bundle_version = mlflow.genai.get_skill_bundle_version_by_alias(
-    skill_bundle_id=bundle.skill_bundle_id,
+# Resolve an agent plugin alias
+plugin_version = mlflow.genai.get_agent_plugin_version_by_alias(
+    agent_plugin_id=plugin.agent_plugin_id,
     alias="production",
 )
 ```
