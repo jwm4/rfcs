@@ -103,7 +103,7 @@ mlflow.genai.register_skill(
 ```python
 plugin = mlflow.genai.create_agent_plugin(name="pr-workflow")
 mlflow.genai.create_agent_plugin_version(
-    agent_plugin_id=plugin.agent_plugin_id,
+    name="pr-workflow",
     skills=[
         "skills:/code-review/1",
         "skills:/style-check/1",
@@ -463,6 +463,7 @@ AgentPluginVersion ||--o{ AgentPluginVersionMember : "has members"
 AgentPluginVersionMember }o--|| SkillVersion : "skill member"
 
 AgentPluginVersionMember {
+  string member_organization
   string member_name
   int member_version
   string member_subpath
@@ -470,18 +471,20 @@ AgentPluginVersionMember {
 ```
 
 The `AgentPluginVersionMember` fields are storage columns parsed
-from the member URI string (e.g., `skills:/code-review/1#path`
-decomposes into `member_name`, `member_version`, and
-`member_subpath`).
+from the member URI string (e.g., `skills:/acme/code-review/1#path`
+decomposes into `member_organization`, `member_name`,
+`member_version`, and `member_subpath`).
 
 #### Skill
 
 A skill is a directory containing a SKILL.md entry point plus
 supporting files (scripts, templates, reference material). The
-`Skill` entity is the logical governed asset, scoped to a workspace.
-Each skill has a server-assigned UUID primary key (`skill_id`).
-Key fields include `name` (unique within workspace),
-`description`,
+`Skill` entity is the logical governed asset, identified by the
+composite key `(workspace, organization, name)`. The
+`organization` field scopes ownership (e.g., a team or publisher
+name) and defaults to `""` (empty string) when not specified.
+Key fields include `name` (unique within workspace and
+organization), `description`,
 `status` (read-only, derived from the parent-resolved version),
 `latest_version` (read-only, highest active version number), and `aliases`.
 
@@ -497,17 +500,18 @@ same rules apply to `AgentPlugin`.
 #### SkillVersion
 
 A versioned record containing a typed source pointer (`git`, `oci`,
-`zip`, or `mlflow`), status, and tags. The `(skill_id, version)` pair
+`zip`, or `mlflow`), status, and tags. The `(workspace, organization, name, version)` tuple
 is unique. Source pointers and version numbers are
 immutable after creation; to point to different content, register a
 new version. The optional `subpath` field identifies content within a
 shared artifact (used with Git, OCI, and ZIP).
 
 `register_skill()` creates the parent Skill when needed (with null
-`description`, server-assigned UUID) and otherwise reuses the existing
-parent. To set parent-level metadata, use `create_skill()` before
-registering versions or `update_skill()` afterward. If the target
-`(skill_id, version)` already exists, registration fails with an error.
+`description`) and otherwise reuses the existing parent. To set
+parent-level metadata, use `create_skill()` before registering
+versions or `update_skill()` afterward. If the target
+`(workspace, organization, name, version)` already exists,
+registration fails with an error.
 This matches the MCP Server Registry behavior
 (`register_mcp_server()` in mlflow/mlflow#23696).
 
@@ -520,8 +524,9 @@ rather than a tag-based grouping because they provide versioned
 membership snapshots (reproducible point-in-time combinations),
 agent plugin-level source pointers (a single OCI image or Git repo),
 independent lifecycle (deprecate an agent plugin without deprecating its
-members), and direct mapping to the harness plugin concept. Each
-agent plugin has a server-assigned UUID primary key (`agent_plugin_id`).
+members), and direct mapping to the harness plugin concept. Agent
+plugins use the same `(workspace, organization, name)` composite
+identity as skills.
 Follows the same top-level pattern as Skill: versions, tags, aliases,
 and derived status.
 
@@ -546,11 +551,12 @@ An agent plugin version is one of two kinds:
   references. Skill member versions may omit their own sources when
   their content lives inside the agent plugin. A source-less member
   must include a `#subpath` fragment in its member URI to identify
-  where it lives inside the agent plugin. `pull` fetches the agent plugin as a unit.
+  where it lives inside the agent plugin. `pull` fetches the agent
+  plugin as a unit.
 
-An agent plugin version cannot have both an agent plugin-level source and skill
-member versions with their own sources. This avoids confusion about
-which source is authoritative for skill content.
+An agent plugin version cannot have both an agent plugin-level source
+and skill member versions with their own sources. This avoids
+confusion about which source is authoritative for skill content.
 
 #### Aliases and tags
 
@@ -635,25 +641,27 @@ pattern (RFC-0004).
 
 Version numbers are server-assigned monotonic integers. Each new
 version for a given skill receives the next integer.
-`get_latest_skill_version(skill_id)` returns the highest version number
-among `active` versions if one exists, otherwise the highest version
-number among non-`deleted` non-`active` versions.
+`get_latest_skill_version(name, organization)` returns the highest
+version number among `active` versions if one exists, otherwise the
+highest version number among non-`deleted` non-`active` versions.
 
 `latest_version` is a read-only computed field on the parent entity
 (not manually pinnable); aliases cover the use case of pointing a
 stable name (e.g., `production`) at a specific version.
 
-The alias name `latest` is reserved: `set_skill_alias(skill_id, 
-alias="latest", ...)` is rejected, while
-`get_skill_version_by_alias(skill_id, alias="latest")` is treated as a
-convenience alias for `get_latest_skill_version(skill_id)`.
+The alias name `latest` is reserved:
+`set_skill_alias(name, alias="latest", organization, ...)` is
+rejected, while
+`get_skill_version_by_alias(name, alias="latest", organization)`
+is treated as a convenience alias for
+`get_latest_skill_version(name, organization)`.
 
 The same rule applies to agent plugins:
-`set_agent_plugin_alias(agent_plugin_id, alias="latest", ...)` is
-rejected, while
-`get_agent_plugin_version_by_alias(agent_plugin_id, alias="latest")`
+`set_agent_plugin_alias(name, alias="latest", organization, ...)`
+is rejected, while
+`get_agent_plugin_version_by_alias(name, alias="latest", organization)`
 delegates to
-`get_latest_agent_plugin_version(agent_plugin_id)`.
+`get_latest_agent_plugin_version(name, organization)`.
 
 This aligns with the MCP Server Registry (RFC-0004).
 

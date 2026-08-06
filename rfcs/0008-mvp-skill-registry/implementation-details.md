@@ -15,22 +15,24 @@ workspace-scoped.
 
 | Column | Type | Notes |
 |--------|------|-------|
-| `skill_id` | `String(36)` | PK, server-assigned UUID |
-| `workspace` | `String(63)` | default `'default'` |
-| `name` | `String(256)` | unique within workspace |
+| `workspace` | `String(63)` | PK, default `'default'` |
+| `organization` | `String(256)` | PK, default `''` (empty string) |
+| `name` | `String(256)` | PK |
 | `description` | `String(5000)` | |
 | `created_by` | `String(256)` | |
 | `last_updated_by` | `String(256)` | |
 | `creation_timestamp` | `BigInteger` | millis since epoch |
 | `last_updated_timestamp` | `BigInteger` | millis since epoch |
 
-UniqueConstraint: `(workspace, name)`.
+PrimaryKey: `(workspace, organization, name)`.
 
 ### `skill_versions`
 
 | Column | Type | Notes |
 |--------|------|-------|
-| `skill_id` | `String(36)` | PK, FK to `skills` |
+| `workspace` | `String(63)` | PK, FK to `skills` |
+| `organization` | `String(256)` | PK, FK to `skills` |
+| `name` | `String(256)` | PK, FK to `skills` |
 | `version` | `Integer` | PK, server-assigned monotonic integer |
 | `source_type` | `String(20)` | nullable; `git`, `oci`, `zip`, `mlflow` |
 | `source` | `String(2048)` | nullable pointer to skill content |
@@ -41,23 +43,26 @@ UniqueConstraint: `(workspace, name)`.
 | `creation_timestamp` | `BigInteger` | millis since epoch |
 | `last_updated_timestamp` | `BigInteger` | millis since epoch |
 
-FK: `skill_id` references `skills`, CASCADE delete. This
-supports administrative hard deletion of the parent `Skill`; normal
-version deletion is a status transition to `deleted` and does not
-physically remove the version row.
+FK: `(workspace, organization, name)` references `skills`, CASCADE
+delete. This supports administrative hard deletion of the parent
+`Skill`; normal version deletion is a status transition to `deleted`
+and does not physically remove the version row.
 
 **Version ordering**: versions are monotonic integers assigned by
 the server. Each new version for a given skill receives
 the next integer. Ordering is a simple integer comparison.
 
-**Index**: `ix_skill_versions_latest_lookup` on `(skill_id,
-status, version)` supports latest-resolution lookups.
+**Index**: `ix_skill_versions_latest_lookup` on `(workspace,
+organization, name, status, version)` supports latest-resolution
+lookups.
 
 ### `skill_tags`
 
 | Column | Type | Notes |
 |--------|------|-------|
-| `skill_id` | `String(36)` | PK, FK to `skills` |
+| `workspace` | `String(63)` | PK, FK to `skills` |
+| `organization` | `String(256)` | PK, FK to `skills` |
+| `name` | `String(256)` | PK, FK to `skills` |
 | `key` | `String(256)` | PK |
 | `value` | `Text` | |
 
@@ -65,7 +70,9 @@ status, version)` supports latest-resolution lookups.
 
 | Column | Type | Notes |
 |--------|------|-------|
-| `skill_id` | `String(36)` | PK, FK to `skill_versions` |
+| `workspace` | `String(63)` | PK, FK to `skill_versions` |
+| `organization` | `String(256)` | PK, FK to `skill_versions` |
+| `name` | `String(256)` | PK, FK to `skill_versions` |
 | `version` | `Integer` | PK, FK to `skill_versions` |
 | `key` | `String(256)` | PK |
 | `value` | `Text` | |
@@ -74,7 +81,9 @@ status, version)` supports latest-resolution lookups.
 
 | Column | Type | Notes |
 |--------|------|-------|
-| `skill_id` | `String(36)` | PK, FK to `skills` |
+| `workspace` | `String(63)` | PK, FK to `skills` |
+| `organization` | `String(256)` | PK, FK to `skills` |
+| `name` | `String(256)` | PK, FK to `skills` |
 | `alias` | `String(256)` | PK |
 | `version` | `Integer` | target version |
 
@@ -82,22 +91,24 @@ status, version)` supports latest-resolution lookups.
 
 | Column | Type | Notes |
 |--------|------|-------|
-| `agent_plugin_id` | `String(36)` | PK, server-assigned UUID |
-| `workspace` | `String(63)` | default `'default'` |
-| `name` | `String(256)` | unique within workspace |
+| `workspace` | `String(63)` | PK, default `'default'` |
+| `organization` | `String(256)` | PK, default `''` (empty string) |
+| `name` | `String(256)` | PK |
 | `description` | `String(5000)` | |
 | `created_by` | `String(256)` | |
 | `last_updated_by` | `String(256)` | |
 | `creation_timestamp` | `BigInteger` | millis since epoch |
 | `last_updated_timestamp` | `BigInteger` | millis since epoch |
 
-UniqueConstraint: `(workspace, name)`.
+PrimaryKey: `(workspace, organization, name)`.
 
 ### `agent_plugin_versions`
 
 | Column | Type | Notes |
 |--------|------|-------|
-| `agent_plugin_id` | `String(36)` | PK, FK to `agent_plugins` |
+| `workspace` | `String(63)` | PK, FK to `agent_plugins` |
+| `organization` | `String(256)` | PK, FK to `agent_plugins` |
+| `name` | `String(256)` | PK, FK to `agent_plugins` |
 | `version` | `Integer` | PK, server-assigned monotonic integer |
 | `source_type` | `String(20)` | optional; `git`, `oci`, `zip`, `mlflow` |
 | `source` | `String(2048)` | optional pointer to agent plugin |
@@ -108,30 +119,38 @@ UniqueConstraint: `(workspace, name)`.
 | `creation_timestamp` | `BigInteger` | millis since epoch |
 | `last_updated_timestamp` | `BigInteger` | millis since epoch |
 
-FK: `agent_plugin_id` references `agent_plugins`, CASCADE delete.
-Version ordering and index follow the same pattern as
-`skill_versions`.
+FK: `(workspace, organization, name)` references `agent_plugins`,
+CASCADE delete. Version ordering and index follow the same pattern
+as `skill_versions`.
 
 ### `agent_plugin_version_members`
 
 | Column | Type | Notes |
 |--------|------|-------|
-| `agent_plugin_id` | `String(36)` | PK, FK to `agent_plugin_versions` |
+| `plugin_workspace` | `String(63)` | PK, FK to `agent_plugin_versions` |
+| `plugin_organization` | `String(256)` | PK, FK to `agent_plugin_versions` |
+| `plugin_name` | `String(256)` | PK, FK to `agent_plugin_versions` |
 | `plugin_version` | `Integer` | PK, FK to `agent_plugin_versions` |
-| `member_skill_id` | `String(36)` | PK, FK to `skill_versions` |
+| `member_organization` | `String(256)` | PK, FK to `skill_versions` |
+| `member_name` | `String(256)` | PK, FK to `skill_versions` |
 | `member_version` | `Integer` | PK, FK to `skill_versions` |
 | `member_subpath` | `String(2048)` | nullable; parsed from `#subpath` fragment of member URI |
 
-FK: `(agent_plugin_id, plugin_version)` references
-`agent_plugin_versions`, CASCADE delete. A FK to `skill_versions`
-via `(member_skill_id, member_version)` enforces referential
-integrity with RESTRICT delete.
+FK: `(plugin_workspace, plugin_organization, plugin_name,
+plugin_version)` references `agent_plugin_versions`, CASCADE
+delete. A FK to `skill_versions` via `(plugin_workspace,
+member_organization, member_name, member_version)` enforces
+referential integrity with RESTRICT delete. Skills and agent
+plugins share the same workspace; `plugin_workspace` is reused for
+the skill FK.
 
 ### `agent_plugin_tags`
 
 | Column | Type | Notes |
 |--------|------|-------|
-| `agent_plugin_id` | `String(36)` | PK, FK to `agent_plugins` |
+| `workspace` | `String(63)` | PK, FK to `agent_plugins` |
+| `organization` | `String(256)` | PK, FK to `agent_plugins` |
+| `name` | `String(256)` | PK, FK to `agent_plugins` |
 | `key` | `String(256)` | PK |
 | `value` | `Text` | |
 
@@ -139,7 +158,9 @@ integrity with RESTRICT delete.
 
 | Column | Type | Notes |
 |--------|------|-------|
-| `agent_plugin_id` | `String(36)` | PK, FK to `agent_plugin_versions` |
+| `workspace` | `String(63)` | PK, FK to `agent_plugin_versions` |
+| `organization` | `String(256)` | PK, FK to `agent_plugin_versions` |
+| `name` | `String(256)` | PK, FK to `agent_plugin_versions` |
 | `version` | `Integer` | PK, FK to `agent_plugin_versions` |
 | `key` | `String(256)` | PK |
 | `value` | `Text` | |
@@ -148,14 +169,16 @@ integrity with RESTRICT delete.
 
 | Column | Type | Notes |
 |--------|------|-------|
-| `agent_plugin_id` | `String(36)` | PK, FK to `agent_plugins` |
+| `workspace` | `String(63)` | PK, FK to `agent_plugins` |
+| `organization` | `String(256)` | PK, FK to `agent_plugins` |
+| `name` | `String(256)` | PK, FK to `agent_plugins` |
 | `alias` | `String(256)` | PK |
 | `version` | `Integer` | target agent plugin version |
 
-**Workspace handling.** Parent entity tables (`skills`, `agent_plugins`)
-carry a `workspace` column for scoping. Single-tenant deployments use
-`'default'`. Child tables reference the parent by UUID, so workspace is
-not repeated in child table primary keys.
+**Workspace handling.** All tables carry a `workspace` column as part
+of the composite key. Single-tenant deployments use `'default'`.
+Child tables reference the parent by `(workspace, organization,
+name)`, so workspace is part of every table's primary key.
 
 **Timestamps.** Set at the application layer via
 `get_current_time_millis()`, not via DDL defaults.
@@ -196,8 +219,8 @@ class SkillStatus(StrEnum):
 
 @dataclass
 class Skill:
-    skill_id: str  # server-assigned UUID
     name: str
+    organization: str = ""
     description: str | None = None
     workspace: str | None = None
     status: SkillStatus | None = None  # read-only, derived from parent-resolved version
@@ -212,8 +235,8 @@ class Skill:
 
 | Field | Type | Description |
 |---|---|---|
-| `skill_id` | `str` | Server-assigned UUID primary key |
-| `name` | `str` | Human-readable name, unique within workspace |
+| `name` | `str` | Human-readable name, unique within `(workspace, organization)` |
+| `organization` | `str` | Scopes ownership (e.g., team or publisher); defaults to `""` (empty string) |
 | `description` | `str` | Optional human-readable description of the skill |
 | `status` | `SkillStatus` | Read-only; derived from the parent-resolved version: highest active version number if present, otherwise highest non-deleted non-active version number |
 | `aliases` | `dict[str, int]` | Stable version pointers (e.g., `{"production": 2}`); read-only, populated from `skill_aliases` table |
@@ -232,9 +255,9 @@ class SkillSourceType(StrEnum):
 
 @dataclass
 class SkillVersion:
-    skill_id: str  # FK to Skill
+    name: str
     version: int
-    name: str | None = None  # denormalized from parent Skill for convenience
+    organization: str = ""
     source_type: SkillSourceType | None = None
     source: str | None = None
     subpath: str | None = None
@@ -251,9 +274,9 @@ class SkillVersion:
 
 | Field | Type | Description |
 |---|---|---|
-| `skill_id` | `str` | FK to parent Skill |
+| `name` | `str` | Skill name (part of composite key with workspace and organization) |
 | `version` | `int` | Server-assigned monotonic integer. Each new version receives the next integer |
-| `name` | `str` | Denormalized from parent Skill for convenience in responses |
+| `organization` | `str` | Organization scope, from parent Skill |
 | `source_type` | `SkillSourceType` | Server-inferred distribution mechanism: `git`, `oci`, `zip`, `mlflow`. Inferred from the `source` URL scheme |
 | `source` | `str` | Pointer to the content in the source system. Required for standalone pull. May be omitted only when the version's content lives within an agent plugin-level artifact, in which case the containing agent plugin membership identifies the embedded content path |
 | `subpath` | `str` | Optional path within the artifact where this skill's content lives. See subpath usage table below |
@@ -300,13 +323,21 @@ stored alongside their models, or who operate in airgapped
 environments where external sources are not reachable.
 
 Content is stored as a directory tree of individual files under a
-controlled artifact path derived from the skill ID and version
-(e.g., `skills/<skill_id>/<version>/`), consistent with how MLflow stores
-model artifacts. The `source` field is null for MLflow-stored content;
-the system knows where to find it by convention. Pull downloads the
-directory tree from the artifact store. The MLflow UI can browse
-individual files within a stored skill version when artifact proxying
-is enabled.
+controlled artifact path derived from the skill's identity and
+version. Workspace scoping is handled at the artifact store level
+(each workspace has its own artifact root), so the path within the
+store is `skills/<organization>/<name>/<version>/`. When
+organization is empty, the path uses `_` as a placeholder (e.g.,
+`skills/_/<name>/<version>/`). This is consistent with how MLflow
+stores model artifacts. The `source` field is null for
+MLflow-stored content; the system knows where to find it by
+convention. Pull downloads the directory tree from the artifact
+store. The MLflow UI can browse individual files within a stored
+skill version when artifact proxying is enabled.
+
+The same artifact path convention applies to agent plugins stored
+with `source_type="mlflow"`: `agent-plugins/<organization>/<name>/<version>/`,
+with `_` for empty organization.
 
 **Client-side upload flow.** When `source` is a local path (detected
 by the absence of a `://` scheme), the SDK uploads the content to
@@ -319,7 +350,8 @@ MLflow artifact storage rather than treating it as a remote pointer:
    `source_type="mlflow"` from the null source.
 3. Using the returned version number, the client uploads each file
    through MLflow's existing artifact APIs to the controlled artifact
-   prefix (`skills/<skill_id>/<version>/`).
+   prefix (`skills/<organization>/<name>/<version>/`, with `_` for
+   empty organization).
 
 Version creation and upload are not atomic. If upload fails after the
 version record is created, the version exists with no content. The
@@ -327,10 +359,11 @@ client makes a best-effort attempt to delete the version record and
 any partially uploaded files. A backend without deletion support can
 retain unreferenced uploaded files until garbage collection.
 
-**Version uniqueness.** The combination of `(skill_id, version)` is
-unique. A skill version represents a single logical version of a
-capability; `source` describes where to find it but is not part of
-its identity.
+**Version uniqueness.** The combination of
+`(workspace, organization, name, version)` is unique. A skill
+version represents a single logical version of a capability;
+`source` describes where to find it but is not part of its
+identity.
 
 **Immutability contract.** `source_type`, `source`, `subpath`,
 and `version` are immutable after creation. To point
@@ -346,8 +379,8 @@ top-level pattern as Skill: versions, tags, and aliases.
 ```python
 @dataclass
 class AgentPlugin:
-    agent_plugin_id: str  # server-assigned UUID
     name: str
+    organization: str = ""
     description: str | None = None
     workspace: str | None = None
     status: SkillStatus | None = None  # read-only, derived from parent-resolved version
@@ -382,9 +415,9 @@ convention:
 ```python
 @dataclass
 class AgentPluginVersion:
-    agent_plugin_id: str  # FK to AgentPlugin
+    name: str
     version: int
-    name: str | None = None  # denormalized from parent AgentPlugin for convenience
+    organization: str = ""
     source_type: SkillSourceType | None = None
     source: str | None = None
     subpath: str | None = None
@@ -402,8 +435,8 @@ class AgentPluginVersion:
 
 ### AgentPluginVersion field details
 
-**Version uniqueness.** The combination of `(agent_plugin_id, version)`
-is unique.
+**Version uniqueness.** The combination of
+`(workspace, organization, name, version)` is unique.
 
 **Agent plugin-level source.** An agent plugin version is either monolithic or
 assembled, never both. All versions of a given agent plugin must be the
@@ -446,22 +479,33 @@ reproducible snapshot of "these specific skill versions work together."
 Skill URIs are used for CLI target identification and agent plugin
 member lists, following the `models:/name/version` convention
 established by MLflow's Model Registry. The Python SDK and REST
-API continue to use separate `name`, `version`, and `alias`
-parameters for primary resource identification.
+API continue to use separate `name`, `organization`, `version`,
+and `alias` parameters for primary resource identification.
 
 | Pattern | Meaning | Example |
 |---------|---------|---------|
-| `skills:/name` | Identify a skill (name only) | `skills:/code-review` |
+| `skills:/name` | Skill with no organization | `skills:/code-review` |
 | `skills:/name/version` | Pin a specific version | `skills:/code-review/1` |
 | `skills:/name@alias` | Resolve through an alias | `skills:/code-review@production` |
-| `skills:/name/version#subpath` | Embedded skill inside a monolithic agent plugin | `skills:/review/1#skills/review` |
+| `skills:/org/name` | Skill with organization | `skills:/acme/code-review` |
+| `skills:/org/name/version` | Pin version with organization | `skills:/acme/code-review/1` |
+| `skills:/org/name@alias` | Alias with organization | `skills:/acme/code-review@production` |
+| `skills:/name/version#subpath` | Embedded skill in monolithic agent plugin | `skills:/review/1#skills/review` |
+
+**URI disambiguation.** When three path segments are present (e.g.,
+`skills:/a/b/1`), the first is the organization, the second is the
+name, and the third (an integer) is the version. When two segments
+are present, the second is either a version (if it parses as an
+integer) or the URI is `organization/name` (if it does not). When
+one segment is present, it is the name with no organization.
 
 In the CLI, every command that targets a skill or agent plugin accepts a
 `--skill-uri` flag (parallel to `--model-uri` in `mlflow models`).
 In agent plugin member lists, URIs appear as plain strings in `list[str]`.
-The server parses the URI into its constituent fields (`member_name`,
-`member_version`, `member_subpath`) for storage and validation. Alias
-URIs are resolved to a concrete version at the time of the API call.
+The server parses the URI into its constituent fields
+(`member_organization`, `member_name`, `member_version`,
+`member_subpath`) for storage and validation. Alias URIs are
+resolved to a concrete version at the time of the API call.
 
 ## Store interface
 
@@ -490,11 +534,14 @@ class SkillRegistryMixin:
 
     def create_skill(
         self, name: str,
+        organization: str = "",
         description: str | None = None,
     ) -> Skill:
         raise NotImplementedError(self.__class__.__name__)
 
-    def get_skill(self, skill_id: str) -> Skill:
+    def get_skill(
+        self, name: str, organization: str = "",
+    ) -> Skill:
         raise NotImplementedError(self.__class__.__name__)
 
     def search_skills(
@@ -508,19 +555,23 @@ class SkillRegistryMixin:
 
     def update_skill(
         self,
-        skill_id: str,
+        name: str,
+        organization: str = "",
         description: str | None = NOT_SET,
     ) -> Skill:
         raise NotImplementedError(self.__class__.__name__)
 
-    def delete_skill(self, skill_id: str) -> None:
+    def delete_skill(
+        self, name: str, organization: str = "",
+    ) -> None:
         raise NotImplementedError(self.__class__.__name__)
 
     # --- SkillVersion operations ---
 
     def create_skill_version(
         self,
-        skill_id: str,
+        name: str,
+        organization: str = "",
         source_type: str | None = None,
         source: str | None = None,
         subpath: str | None = None,
@@ -529,21 +580,26 @@ class SkillRegistryMixin:
         raise NotImplementedError(self.__class__.__name__)
 
     def get_skill_version(
-        self, skill_id: str, version: int,
+        self, name: str, version: int,
+        organization: str = "",
     ) -> SkillVersion:
         raise NotImplementedError(self.__class__.__name__)
 
     def get_skill_version_by_alias(
-        self, skill_id: str, alias: str,
+        self, name: str, alias: str,
+        organization: str = "",
     ) -> SkillVersion:
         raise NotImplementedError(self.__class__.__name__)
 
-    def get_latest_skill_version(self, skill_id: str) -> SkillVersion:
+    def get_latest_skill_version(
+        self, name: str, organization: str = "",
+    ) -> SkillVersion:
         raise NotImplementedError(self.__class__.__name__)
 
     def search_skill_versions(
         self,
-        skill_id: str,
+        name: str,
+        organization: str = "",
         filter_string: str | None = None,
         max_results: int = SEARCH_MAX_RESULTS_DEFAULT,
         order_by: list[str] | None = None,
@@ -553,47 +609,57 @@ class SkillRegistryMixin:
 
     def update_skill_version(
         self,
-        skill_id: str,
+        name: str,
         version: int,
+        organization: str = "",
         status: SkillStatus | None = NOT_SET,
     ) -> SkillVersion:
         raise NotImplementedError(self.__class__.__name__)
 
     def delete_skill_version(
-        self, skill_id: str, version: int,
+        self, name: str, version: int,
+        organization: str = "",
     ) -> None:
         raise NotImplementedError(self.__class__.__name__)
 
     # --- Skill tag operations ---
 
     def set_skill_tag(
-        self, skill_id: str, key: str, value: str,
+        self, name: str, key: str, value: str,
+        organization: str = "",
     ) -> None:
         raise NotImplementedError(self.__class__.__name__)
 
-    def delete_skill_tag(self, skill_id: str, key: str) -> None:
+    def delete_skill_tag(
+        self, name: str, key: str,
+        organization: str = "",
+    ) -> None:
         raise NotImplementedError(self.__class__.__name__)
 
     def set_skill_version_tag(
-        self, skill_id: str, version: int,
+        self, name: str, version: int,
         key: str, value: str,
+        organization: str = "",
     ) -> None:
         raise NotImplementedError(self.__class__.__name__)
 
     def delete_skill_version_tag(
-        self, skill_id: str, version: int, key: str,
+        self, name: str, version: int, key: str,
+        organization: str = "",
     ) -> None:
         raise NotImplementedError(self.__class__.__name__)
 
     # --- Skill alias operations ---
 
     def set_skill_alias(
-        self, skill_id: str, alias: str, version: int,
+        self, name: str, alias: str, version: int,
+        organization: str = "",
     ) -> None:
         raise NotImplementedError(self.__class__.__name__)
 
     def delete_skill_alias(
-        self, skill_id: str, alias: str,
+        self, name: str, alias: str,
+        organization: str = "",
     ) -> None:
         raise NotImplementedError(self.__class__.__name__)
 
@@ -601,11 +667,14 @@ class SkillRegistryMixin:
 
     def create_agent_plugin(
         self, name: str,
+        organization: str = "",
         description: str | None = None,
     ) -> AgentPlugin:
         raise NotImplementedError(self.__class__.__name__)
 
-    def get_agent_plugin(self, agent_plugin_id: str) -> AgentPlugin:
+    def get_agent_plugin(
+        self, name: str, organization: str = "",
+    ) -> AgentPlugin:
         raise NotImplementedError(self.__class__.__name__)
 
     def search_agent_plugins(
@@ -619,19 +688,23 @@ class SkillRegistryMixin:
 
     def update_agent_plugin(
         self,
-        agent_plugin_id: str,
+        name: str,
+        organization: str = "",
         description: str | None = NOT_SET,
     ) -> AgentPlugin:
         raise NotImplementedError(self.__class__.__name__)
 
-    def delete_agent_plugin(self, agent_plugin_id: str) -> None:
+    def delete_agent_plugin(
+        self, name: str, organization: str = "",
+    ) -> None:
         raise NotImplementedError(self.__class__.__name__)
 
     # --- AgentPluginVersion operations ---
 
     def create_agent_plugin_version(
         self,
-        agent_plugin_id: str,
+        name: str,
+        organization: str = "",
         skills: list[str] | None = None,
         source_type: str | None = None,
         source: str | None = None,
@@ -640,23 +713,26 @@ class SkillRegistryMixin:
         raise NotImplementedError(self.__class__.__name__)
 
     def get_agent_plugin_version(
-        self, agent_plugin_id: str, version: int,
+        self, name: str, version: int,
+        organization: str = "",
     ) -> AgentPluginVersion:
         raise NotImplementedError(self.__class__.__name__)
 
     def get_agent_plugin_version_by_alias(
-        self, agent_plugin_id: str, alias: str,
+        self, name: str, alias: str,
+        organization: str = "",
     ) -> AgentPluginVersion:
         raise NotImplementedError(self.__class__.__name__)
 
     def get_latest_agent_plugin_version(
-        self, agent_plugin_id: str,
+        self, name: str, organization: str = "",
     ) -> AgentPluginVersion:
         raise NotImplementedError(self.__class__.__name__)
 
     def search_agent_plugin_versions(
         self,
-        agent_plugin_id: str,
+        name: str,
+        organization: str = "",
         filter_string: str | None = None,
         max_results: int = SEARCH_MAX_RESULTS_DEFAULT,
         order_by: list[str] | None = None,
@@ -666,49 +742,57 @@ class SkillRegistryMixin:
 
     def update_agent_plugin_version(
         self,
-        agent_plugin_id: str,
+        name: str,
         version: int,
+        organization: str = "",
         status: SkillStatus | None = NOT_SET,
     ) -> AgentPluginVersion:
         raise NotImplementedError(self.__class__.__name__)
 
     def delete_agent_plugin_version(
-        self, agent_plugin_id: str, version: int,
+        self, name: str, version: int,
+        organization: str = "",
     ) -> None:
         raise NotImplementedError(self.__class__.__name__)
 
     # --- AgentPlugin tag operations ---
 
     def set_agent_plugin_tag(
-        self, agent_plugin_id: str, key: str, value: str,
+        self, name: str, key: str, value: str,
+        organization: str = "",
     ) -> None:
         raise NotImplementedError(self.__class__.__name__)
 
     def delete_agent_plugin_tag(
-        self, agent_plugin_id: str, key: str,
+        self, name: str, key: str,
+        organization: str = "",
     ) -> None:
         raise NotImplementedError(self.__class__.__name__)
 
     def set_agent_plugin_version_tag(
-        self, agent_plugin_id: str, version: int,
+        self, name: str, version: int,
         key: str, value: str,
+        organization: str = "",
     ) -> None:
         raise NotImplementedError(self.__class__.__name__)
 
     def delete_agent_plugin_version_tag(
-        self, agent_plugin_id: str, version: int, key: str,
+        self, name: str, version: int, key: str,
+        organization: str = "",
     ) -> None:
         raise NotImplementedError(self.__class__.__name__)
 
     # --- AgentPlugin alias operations ---
 
     def set_agent_plugin_alias(
-        self, agent_plugin_id: str, alias: str, version: int,
+        self, name: str, alias: str, version: int,
+        organization: str = "",
     ) -> None:
         raise NotImplementedError(self.__class__.__name__)
 
     def delete_agent_plugin_alias(
-        self, agent_plugin_id: str, alias: str,
+        self, name: str, alias: str,
+        organization: str = "",
     ) -> None:
         raise NotImplementedError(self.__class__.__name__)
 ```
@@ -723,10 +807,10 @@ For update fields, omitting a parameter leaves the stored value
 unchanged, while passing `None` to a nullable field explicitly sets
 the field to `null`.
 
-All store methods that identify a specific entity use the UUID
-(`skill_id` or `agent_plugin_id`) rather than name. Name-based
-lookups are provided at the SDK layer via `search_skills()` with a
-name filter.
+All store methods that identify a specific entity use `name` and
+`organization` (with `organization` defaulting to `""` when
+omitted). Workspace scoping is handled implicitly by the store
+implementation based on the caller's context.
 
 ## SDK convenience functions
 
@@ -743,19 +827,19 @@ import mlflow
 def register_skill(
     *,
     name: str | None = None,
+    organization: str = "",
     source: str | None = None,
     subpath: str | None = None,
     status: str = "draft",
 ) -> SkillVersion:
     """Register a skill version. The server assigns the next
-    monotonic integer version and a UUID for the parent Skill if
-    it is auto-created. Auto-creates the parent Skill if
-    it does not exist (with null description) and
-    otherwise reuses the existing parent. To set parent-level
-    metadata, use create_skill() before registering versions or
-    update_skill() afterward. This matches the MCP Server Registry
-    behavior (register_mcp_server). If name is omitted, the name
-    is extracted from the skill's SKILL.md entry point (server-side
+    monotonic integer version. Auto-creates the parent Skill if
+    it does not exist (with null description) and otherwise reuses
+    the existing parent. To set parent-level metadata, use
+    create_skill() before registering versions or update_skill()
+    afterward. This matches the MCP Server Registry behavior
+    (register_mcp_server). If name is omitted, the name is
+    extracted from the skill's SKILL.md entry point (server-side
     for remote sources, client-side for local paths). The server
     infers source_type from the source URL (.git suffix or git://
     = git, oci:// = oci, .zip = zip). If source is a local path
@@ -766,11 +850,12 @@ def register_skill(
 def create_skill(
     *,
     name: str,
+    organization: str = "",
     description: str | None = None,
 ) -> Skill: ...
 
 
-def get_skill(*, skill_id: str) -> Skill: ...
+def get_skill(*, name: str, organization: str = "") -> Skill: ...
 
 
 def search_skills(
@@ -784,34 +869,37 @@ def search_skills(
 
 def update_skill(
     *,
-    skill_id: str,
+    name: str,
+    organization: str = "",
     description: str | None = NOT_SET,
 ) -> Skill: ...
 
 
-def delete_skill(*, skill_id: str) -> None: ...
+def delete_skill(*, name: str, organization: str = "") -> None: ...
 
 
 def create_skill_version(
     *,
-    skill_id: str,
+    name: str,
+    organization: str = "",
     source: str | None = None,
     subpath: str | None = None,
 ) -> SkillVersion: ...
 
 
-def get_skill_version(*, skill_id: str, version: int) -> SkillVersion: ...
+def get_skill_version(*, name: str, version: int, organization: str = "") -> SkillVersion: ...
 
 
-def get_skill_version_by_alias(*, skill_id: str, alias: str) -> SkillVersion: ...
+def get_skill_version_by_alias(*, name: str, alias: str, organization: str = "") -> SkillVersion: ...
 
 
-def get_latest_skill_version(*, skill_id: str) -> SkillVersion: ...
+def get_latest_skill_version(*, name: str, organization: str = "") -> SkillVersion: ...
 
 
 def search_skill_versions(
     *,
-    skill_id: str,
+    name: str,
+    organization: str = "",
     filter_string: str | None = None,
     max_results: int = 100,
     order_by: list[str] | None = None,
@@ -821,32 +909,35 @@ def search_skill_versions(
 
 def update_skill_version(
     *,
-    skill_id: str,
+    name: str,
     version: int,
+    organization: str = "",
     status: str | None = NOT_SET,
 ) -> SkillVersion: ...
 
 
-def delete_skill_version(*, skill_id: str, version: int) -> None: ...
+def delete_skill_version(*, name: str, version: int, organization: str = "") -> None: ...
 
 
 def create_agent_plugin(
     *,
     name: str,
+    organization: str = "",
     description: str | None = None,
 ) -> AgentPlugin: ...
 
 
 def create_agent_plugin_version(
     *,
-    agent_plugin_id: str,
+    name: str,
+    organization: str = "",
     skills: list[str] | None = None,
     source: str | None = None,
     subpath: str | None = None,
 ) -> AgentPluginVersion: ...
 
 
-def get_agent_plugin(*, agent_plugin_id: str) -> AgentPlugin: ...
+def get_agent_plugin(*, name: str, organization: str = "") -> AgentPlugin: ...
 
 
 def search_agent_plugins(
@@ -860,30 +951,32 @@ def search_agent_plugins(
 
 def update_agent_plugin(
     *,
-    agent_plugin_id: str,
+    name: str,
+    organization: str = "",
     description: str | None = NOT_SET,
 ) -> AgentPlugin: ...
 
 
-def delete_agent_plugin(*, agent_plugin_id: str) -> None: ...
+def delete_agent_plugin(*, name: str, organization: str = "") -> None: ...
 
 
 def get_agent_plugin_version(
-    *, agent_plugin_id: str, version: int,
+    *, name: str, version: int, organization: str = "",
 ) -> AgentPluginVersion: ...
 
 
 def get_agent_plugin_version_by_alias(
-    *, agent_plugin_id: str, alias: str,
+    *, name: str, alias: str, organization: str = "",
 ) -> AgentPluginVersion: ...
 
 
-def get_latest_agent_plugin_version(*, agent_plugin_id: str) -> AgentPluginVersion: ...
+def get_latest_agent_plugin_version(*, name: str, organization: str = "") -> AgentPluginVersion: ...
 
 
 def search_agent_plugin_versions(
     *,
-    agent_plugin_id: str,
+    name: str,
+    organization: str = "",
     filter_string: str | None = None,
     max_results: int = 100,
     order_by: list[str] | None = None,
@@ -893,38 +986,39 @@ def search_agent_plugin_versions(
 
 def update_agent_plugin_version(
     *,
-    agent_plugin_id: str,
+    name: str,
     version: int,
+    organization: str = "",
     status: str | None = NOT_SET,
 ) -> AgentPluginVersion: ...
 
 
-def delete_agent_plugin_version(*, agent_plugin_id: str, version: int) -> None: ...
+def delete_agent_plugin_version(*, name: str, version: int, organization: str = "") -> None: ...
 
 
-def set_skill_tag(*, skill_id: str, key: str, value: str) -> None: ...
+def set_skill_tag(*, name: str, key: str, value: str, organization: str = "") -> None: ...
 
-def delete_skill_tag(*, skill_id: str, key: str) -> None: ...
+def delete_skill_tag(*, name: str, key: str, organization: str = "") -> None: ...
 
-def set_skill_version_tag(*, skill_id: str, version: int, key: str, value: str) -> None: ...
+def set_skill_version_tag(*, name: str, version: int, key: str, value: str, organization: str = "") -> None: ...
 
-def delete_skill_version_tag(*, skill_id: str, version: int, key: str) -> None: ...
+def delete_skill_version_tag(*, name: str, version: int, key: str, organization: str = "") -> None: ...
 
-def set_skill_alias(*, skill_id: str, alias: str, version: int) -> None: ...
+def set_skill_alias(*, name: str, alias: str, version: int, organization: str = "") -> None: ...
 
-def delete_skill_alias(*, skill_id: str, alias: str) -> None: ...
+def delete_skill_alias(*, name: str, alias: str, organization: str = "") -> None: ...
 
-def set_agent_plugin_tag(*, agent_plugin_id: str, key: str, value: str) -> None: ...
+def set_agent_plugin_tag(*, name: str, key: str, value: str, organization: str = "") -> None: ...
 
-def delete_agent_plugin_tag(*, agent_plugin_id: str, key: str) -> None: ...
+def delete_agent_plugin_tag(*, name: str, key: str, organization: str = "") -> None: ...
 
-def set_agent_plugin_version_tag(*, agent_plugin_id: str, version: int, key: str, value: str) -> None: ...
+def set_agent_plugin_version_tag(*, name: str, version: int, key: str, value: str, organization: str = "") -> None: ...
 
-def delete_agent_plugin_version_tag(*, agent_plugin_id: str, version: int, key: str) -> None: ...
+def delete_agent_plugin_version_tag(*, name: str, version: int, key: str, organization: str = "") -> None: ...
 
-def set_agent_plugin_alias(*, agent_plugin_id: str, alias: str, version: int) -> None: ...
+def set_agent_plugin_alias(*, name: str, alias: str, version: int, organization: str = "") -> None: ...
 
-def delete_agent_plugin_alias(*, agent_plugin_id: str, alias: str) -> None: ...
+def delete_agent_plugin_alias(*, name: str, alias: str, organization: str = "") -> None: ...
 
 
 @dataclass(frozen=True)
@@ -966,6 +1060,7 @@ def import_plugin(
     *,
     source: str,
     plugin_name: str | None = None,
+    organization: str = "",
     subpath: str | None = None,
 ) -> PluginImportResult:
     """Import a plugin as a monolithic agent plugin.
@@ -981,20 +1076,20 @@ def import_plugin(
 
 def pull(
     *,
-    skill_id: str | None = None,
-    agent_plugin_id: str | None = None,
+    name: str | None = None,
+    organization: str = "",
+    entity_type: str = "skill",
     version: int | None = None,
     alias: str | None = None,
     destination: str = ".",
 ) -> str:
     """Pull skill or agent plugin content from registered sources to a
-    local directory. Specify skill_id for a single skill or
-    agent_plugin_id for an agent plugin."""
+    local directory. Set entity_type to 'skill' or 'agent_plugin'."""
 
 
 # Example usage:
 version = mlflow.genai.register_skill(name="code-review", source="https://github.com/acme/skills.git@v1.0.0")
-# version.skill_id contains the UUID for subsequent operations
+# version.name and version.organization identify the skill for subsequent operations
 skills = mlflow.genai.search_skills(filter_string="status = 'active'")
 ```
 
@@ -1024,16 +1119,16 @@ SKILL.md entry point. If the server cannot access the source (e.g.,
 private repositories requiring client-side credentials), registration
 fails with an error indicating that `name` must be provided explicitly.
 The server always infers `source_type` from the
-`source` value: `.git` before the `@ref` portion or `git://` scheme = git, `oci://` = oci,
-`.zip` = zip, and null `source` = mlflow (content stored in MLflow
-artifact storage). The one exception is embedded skills created during
-agent plugin import, where the importer sets `source_type`, `source`, and
-`subpath` all to null because the content lives inside the agent plugin
-artifact rather than in standalone storage. `source_type` is not a
-user-facing parameter. This keeps
-SDKs as thin REST wrappers, avoids reimplementing inference in every
-language, and prepares for future server-side content inspection
-(e.g., signature verification).
+`source` value: `.git` before the `@ref` portion or `git://` scheme
+= git, `oci://` = oci, `.zip` = zip, and null `source` = mlflow
+(content stored in MLflow artifact storage). The one exception is
+embedded skills created during agent plugin import, where the
+importer sets `source_type`, `source`, and `subpath` all to null
+because the content lives inside the agent plugin artifact rather
+than in standalone storage. `source_type` is not a user-facing
+parameter. This keeps SDKs as thin REST wrappers, avoids
+reimplementing inference in every language, and prepares for future
+server-side content inspection (e.g., signature verification).
 
 There is no skill-registry content-upload endpoint. When `source` is
 a local path, the client creates a version record with null source to
@@ -1049,21 +1144,24 @@ All paths relative to the logical skills router prefix.
 | `POST` | `/` | Create a skill |
 | `GET` | `/` | Search skills |
 | `POST` | `/register` | Register a skill version (name optional; server infers from source when omitted, auto-creates parent) |
-| `GET` | `/{skill_id}` | Get skill by ID |
-| `PATCH` | `/{skill_id}` | Update skill fields |
-| `DELETE` | `/{skill_id}` | Hard-delete skill (cascades, subject to references) |
-| `POST` | `/{skill_id}/versions` | Create a skill version |
-| `GET` | `/{skill_id}/versions` | Search versions |
-| `GET` | `/{skill_id}/versions/{version}` | Get a specific version |
-| `PATCH` | `/{skill_id}/versions/{version}` | Update version |
-| `DELETE` | `/{skill_id}/versions/{version}` | Soft-delete a version (`status='deleted'`) |
-| `POST` | `/{skill_id}/tags` | Set a skill-level tag |
-| `DELETE` | `/{skill_id}/tags/{key}` | Delete a skill-level tag |
-| `POST` | `/{skill_id}/versions/{version}/tags` | Set a version-level tag |
-| `DELETE` | `/{skill_id}/versions/{version}/tags/{key}` | Delete a version tag |
-| `POST` | `/{skill_id}/aliases` | Set an alias |
-| `GET` | `/{skill_id}/aliases/{alias}` | Resolve alias to `SkillVersion` |
-| `DELETE` | `/{skill_id}/aliases/{alias}` | Delete an alias |
+| `GET` | `/{organization}/{name}` | Get skill by organization and name |
+| `PATCH` | `/{organization}/{name}` | Update skill fields |
+| `DELETE` | `/{organization}/{name}` | Hard-delete skill (cascades, subject to references) |
+| `POST` | `/{organization}/{name}/versions` | Create a skill version |
+| `GET` | `/{organization}/{name}/versions` | Search versions |
+| `GET` | `/{organization}/{name}/versions/{version}` | Get a specific version |
+| `PATCH` | `/{organization}/{name}/versions/{version}` | Update version |
+| `DELETE` | `/{organization}/{name}/versions/{version}` | Soft-delete a version (`status='deleted'`) |
+| `POST` | `/{organization}/{name}/tags` | Set a skill-level tag |
+| `DELETE` | `/{organization}/{name}/tags/{key}` | Delete a skill-level tag |
+| `POST` | `/{organization}/{name}/versions/{version}/tags` | Set a version-level tag |
+| `DELETE` | `/{organization}/{name}/versions/{version}/tags/{key}` | Delete a version tag |
+| `POST` | `/{organization}/{name}/aliases` | Set an alias |
+| `GET` | `/{organization}/{name}/aliases/{alias}` | Resolve alias to `SkillVersion` |
+| `DELETE` | `/{organization}/{name}/aliases/{alias}` | Delete an alias |
+
+When `organization` is empty, the path segment uses the literal
+value `_` as a placeholder (e.g., `/_/code-review/versions/1`).
 
 Similarly, agent plugin endpoints are exposed under both
 `/api/3.0/mlflow/agent-plugins` and
@@ -1077,21 +1175,24 @@ All paths relative to the logical agent-plugins router prefix.
 |---|---|---|
 | `POST` | `/` | Create an agent plugin |
 | `GET` | `/` | Search agent plugins |
-| `GET` | `/{agent_plugin_id}` | Get agent plugin by ID |
-| `PATCH` | `/{agent_plugin_id}` | Update agent plugin fields |
-| `DELETE` | `/{agent_plugin_id}` | Hard-delete agent plugin (cascades versions and memberships) |
-| `POST` | `/{agent_plugin_id}/versions` | Create an agent plugin version with members |
-| `GET` | `/{agent_plugin_id}/versions` | Search agent plugin versions |
-| `GET` | `/{agent_plugin_id}/versions/{version}` | Get a specific agent plugin version |
-| `PATCH` | `/{agent_plugin_id}/versions/{version}` | Update agent plugin version status |
-| `DELETE` | `/{agent_plugin_id}/versions/{version}` | Soft-delete an agent plugin version (`status='deleted'`) |
-| `POST` | `/{agent_plugin_id}/tags` | Set an agent plugin-level tag |
-| `DELETE` | `/{agent_plugin_id}/tags/{key}` | Delete an agent plugin-level tag |
-| `POST` | `/{agent_plugin_id}/versions/{version}/tags` | Set an agent plugin version tag |
-| `DELETE` | `/{agent_plugin_id}/versions/{version}/tags/{key}` | Delete an agent plugin version tag |
-| `POST` | `/{agent_plugin_id}/aliases` | Set an agent plugin alias |
-| `GET` | `/{agent_plugin_id}/aliases/{alias}` | Resolve agent plugin alias to version |
-| `DELETE` | `/{agent_plugin_id}/aliases/{alias}` | Delete an agent plugin alias |
+| `GET` | `/{organization}/{name}` | Get agent plugin by organization and name |
+| `PATCH` | `/{organization}/{name}` | Update agent plugin fields |
+| `DELETE` | `/{organization}/{name}` | Hard-delete agent plugin (cascades versions and memberships) |
+| `POST` | `/{organization}/{name}/versions` | Create an agent plugin version with members |
+| `GET` | `/{organization}/{name}/versions` | Search agent plugin versions |
+| `GET` | `/{organization}/{name}/versions/{version}` | Get a specific agent plugin version |
+| `PATCH` | `/{organization}/{name}/versions/{version}` | Update agent plugin version status |
+| `DELETE` | `/{organization}/{name}/versions/{version}` | Soft-delete an agent plugin version (`status='deleted'`) |
+| `POST` | `/{organization}/{name}/tags` | Set an agent plugin-level tag |
+| `DELETE` | `/{organization}/{name}/tags/{key}` | Delete an agent plugin-level tag |
+| `POST` | `/{organization}/{name}/versions/{version}/tags` | Set an agent plugin version tag |
+| `DELETE` | `/{organization}/{name}/versions/{version}/tags/{key}` | Delete an agent plugin version tag |
+| `POST` | `/{organization}/{name}/aliases` | Set an agent plugin alias |
+| `GET` | `/{organization}/{name}/aliases/{alias}` | Resolve agent plugin alias to version |
+| `DELETE` | `/{organization}/{name}/aliases/{alias}` | Delete an agent plugin alias |
+
+Same `_` placeholder convention for empty organization as skill
+endpoints.
 
 ### Pagination and filtering
 
@@ -1110,10 +1211,12 @@ find agent plugins that include a given skill (reverse membership lookup)
 ### Request and response models
 
 Request models contain only the mutable fields; resource identifiers
-come from path parameters (UUIDs), with one exception: `POST /register`
-accepts `name` in the request body (optional, inferred from source
-content when omitted) and returns the server-assigned `skill_id`.
-This parallels RFC-0004's top-level `register_mcp_server()` pattern:
+come from path parameters (`organization` and `name`), with one
+exception: `POST /register` accepts `name` and `organization` in
+the request body (`name` is optional, inferred from source content
+when omitted; `organization` defaults to `""`) and returns the
+created skill identity. This parallels RFC-0004's top-level
+`register_mcp_server()` pattern:
 
 ```python
 from pydantic import BaseModel, Field
@@ -1121,6 +1224,7 @@ from pydantic import BaseModel, Field
 
 class CreateSkillRequest(BaseModel):
     name: str
+    organization: str = ""
     description: str | None = None
 
 
@@ -1129,7 +1233,8 @@ class UpdateSkillRequest(BaseModel):
 
 
 class CreateSkillVersionRequest(BaseModel):
-    name: str | None = None  # optional for POST /register (inferred from source when omitted); ignored for POST /{skill_id}/versions (name from parent)
+    name: str | None = None  # optional for POST /register (inferred from source when omitted); ignored for POST /{organization}/{name}/versions (name from parent)
+    organization: str = ""  # for POST /register only; ignored for versioned paths
     source: str | None = None
     subpath: str | None = None
     status: str = "draft"
@@ -1141,6 +1246,7 @@ class UpdateSkillVersionRequest(BaseModel):
 
 class CreateAgentPluginRequest(BaseModel):
     name: str
+    organization: str = ""
     description: str | None = None
 
 
@@ -1174,9 +1280,9 @@ class SetTagRequest(BaseModel):
 
 
 class SkillVersionResponse(BaseModel):
-    skill_id: str
+    name: str
     version: int
-    name: str | None = None
+    organization: str = ""
     source_type: str | None = None
     source: str | None = None
     subpath: str | None = None
@@ -1190,8 +1296,8 @@ class SkillVersionResponse(BaseModel):
 
 
 class SkillResponse(BaseModel):
-    skill_id: str
     name: str
+    organization: str = ""
     description: str | None = None
     status: str | None = None
     latest_version: int | None = None
@@ -1204,9 +1310,9 @@ class SkillResponse(BaseModel):
 
 
 class AgentPluginVersionResponse(BaseModel):
-    agent_plugin_id: str
+    name: str
     version: int
-    name: str | None = None
+    organization: str = ""
     source_type: str | None = None
     source: str | None = None
     subpath: str | None = None
@@ -1221,8 +1327,8 @@ class AgentPluginVersionResponse(BaseModel):
 
 
 class AgentPluginResponse(BaseModel):
-    agent_plugin_id: str
     name: str
+    organization: str = ""
     description: str | None = None
     status: str | None = None
     latest_version: int | None = None
@@ -1239,24 +1345,41 @@ for convenience, while REST responses expose aliases as
 `list[AliasResponse]` to keep the payload shape explicit and
 consistent with the MCP Server Registry (RFC-0004).
 
-**UUID primary keys.** Skills and agent plugins use server-assigned
-UUIDs as primary keys, following the pattern established by
-`GatewayEndpoint`. The `name` field is unique within a workspace
-(enforced by a unique constraint), so entities can be looked up by
-either UUID or name. This preserves unambiguous name-based URIs and
-deterministic registration while providing stable, opaque identifiers
-for cross-system references.
+**Composite primary keys.** Skills and agent plugins use a
+`(workspace, organization, name)` composite primary key. The
+`organization` field scopes ownership (e.g., a team or publisher
+name) and defaults to `""` (empty string) when not specified.
+This allows the same skill name to exist under different
+organizations without collision (e.g., `acme/code-review` and
+`beta-corp/code-review` are distinct skills). When `organization`
+is empty, the skill is identified by name alone within its
+workspace, consistent with the MCP Server Registry (RFC-0004).
+The Prompt Registry is considering adding `organization` for
+similar reasons; this design aligns with that direction.
+
+**Name and organization validation.** The server rejects
+`organization` and `name` values that would create ambiguity in
+URIs, REST paths, or artifact storage paths:
+
+- `organization` cannot be `_` (reserved as the empty-organization
+  placeholder in REST paths and artifact paths).
+- `name` cannot be purely numeric (e.g., `123`), because URI
+  disambiguation relies on integer parsing to distinguish
+  `name/version` from `organization/name`.
+- Neither field may contain `/`, `@`, `#`, or `?` (URI-significant
+  characters).
 
 ## Python SDK and CLI
 
 The `mlflow.genai` module exposes the public registry functions,
 delegating to `MlflowClient`, plus client-side import and pull
-operations that compose those registry functions. Skill-specific entity and request types are also re-exported
-from `mlflow.genai`. The `mlflow skills` CLI command group
-provides the same operations from the command line. CLI commands
-accept `--skill-id` or `--agent-plugin-id` flags for entity
-identification, and `--skill-uri` as a convenience that resolves
-names and aliases to UUIDs:
+operations that compose those registry functions. Skill-specific
+entity and request types are also re-exported from `mlflow.genai`.
+The `mlflow skills` CLI command group provides the same operations
+from the command line. CLI commands accept `--name` and optional
+`--organization` flags for entity identification, and
+`--skill-uri` as a convenience that parses name, organization,
+and version from a URI:
 
 | CLI subcommand | SDK function | Description |
 |---|---|---|
@@ -1432,7 +1555,7 @@ mlflow.genai.register_skill(
 # Assembled agent plugin: each member has its own source
 plugin = mlflow.genai.create_agent_plugin(name="pr-workflow")
 plugin_version = mlflow.genai.create_agent_plugin_version(
-    agent_plugin_id=plugin.agent_plugin_id,
+    name="pr-workflow",
     skills=[
         "skills:/code-review/1",
         "skills:/test-coverage/1",
@@ -1453,7 +1576,8 @@ skill = skills[0]
 
 # Search for active versions of that skill
 versions = mlflow.genai.search_skill_versions(
-    skill_id=skill.skill_id,
+    name=skill.name,
+    organization=skill.organization,
     filter_string="status = 'active'",
 )
 
@@ -1464,7 +1588,8 @@ plugins = mlflow.genai.search_agent_plugins(
 
 # Get a specific version
 version = mlflow.genai.get_skill_version(
-    skill_id=skill.skill_id,
+    name=skill.name,
+    organization=skill.organization,
     version=1,
 )
 # version.source_type == "git"
@@ -1473,7 +1598,8 @@ version = mlflow.genai.get_skill_version(
 
 # Resolve by alias
 version = mlflow.genai.get_skill_version_by_alias(
-    skill_id=skill.skill_id,
+    name=skill.name,
+    organization=skill.organization,
     alias="production",
 )
 
@@ -1482,14 +1608,16 @@ plugin = mlflow.genai.search_agent_plugins(
     filter_string="name = 'pr-workflow'",
 )[0]
 plugin_version = mlflow.genai.get_agent_plugin_version(
-    agent_plugin_id=plugin.agent_plugin_id,
+    name=plugin.name,
+    organization=plugin.organization,
     version=1,
 )
 # plugin_version.skills == ["skills:/code-review/1", ...]
 
 # Resolve an agent plugin alias
 plugin_version = mlflow.genai.get_agent_plugin_version_by_alias(
-    agent_plugin_id=plugin.agent_plugin_id,
+    name=plugin.name,
+    organization=plugin.organization,
     alias="production",
 )
 ```
