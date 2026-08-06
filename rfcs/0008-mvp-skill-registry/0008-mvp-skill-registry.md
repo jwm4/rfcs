@@ -201,13 +201,15 @@ infrastructure; registry-specific trace linkage (SKILL spans,
    ```
    **UI path:** Navigate to the Agent Plugins tab, click "Create Agent Plugin,"
    add members by searching and selecting from registered skills.
-3. Transition the agent plugin version from draft to active:
+3. The agent plugin version is `active` by default. If needed,
+   transition to `draft` for further review before making it
+   available:
    ```bash
    mlflow agent-plugins update-version --skill-uri skills:/pr-workflow/1 \
-       --status active
+       --status draft
    ```
    **UI path:** Open the agent plugin version detail page, use the status
-   dropdown to change from "draft" to "active."
+   dropdown to change from "active" to "draft."
 4. Set an alias for stable downstream resolution:
    ```bash
    mlflow agent-plugins set-alias --skill-uri skills:/pr-workflow \
@@ -580,11 +582,11 @@ status:
 
 ```mermaid
 stateDiagram-v2
-    [*] --> draft
-    draft --> active : publish
-    draft --> deleted : discard
+    [*] --> active
     active --> draft : unpublish
     active --> deprecated
+    draft --> active : publish
+    draft --> deleted : discard
     deprecated --> active : re-activate
     deprecated --> deleted
 ```
@@ -596,7 +598,7 @@ stateDiagram-v2
 | `deprecated` | Still functional but no longer recommended | Surfaced with deprecation signal |
 | `deleted` | Soft-deleted; preserved internally for history, no longer active | Not surfaced by normal get/search/list APIs |
 
-New versions default to `draft` upon creation.
+New versions default to `active` upon creation.
 
 Allowed transitions:
 
@@ -674,6 +676,13 @@ This aligns with the MCP Server Registry (RFC-0004).
 > converge, both RFCs can be aligned in a follow-up without changing
 > the data model, since version is an opaque identifier from the
 > caller's perspective.
+
+> **Default status divergence from RFC-0004.** The MCP Server
+> Registry defaults new versions to `draft`. This RFC defaults to
+> `active` because skill registration is typically a publish action:
+> the user is registering a known-good version from an existing
+> source. Users who need a review gate before activation can
+> explicitly set `status="draft"` at registration time.
 
 ### Plugin import
 

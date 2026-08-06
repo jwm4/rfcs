@@ -37,7 +37,7 @@ PrimaryKey: `(workspace, organization, name)`.
 | `source_type` | `String(20)` | nullable; `git`, `oci`, `zip`, `mlflow` |
 | `source` | `String(2048)` | nullable pointer to skill content |
 | `subpath` | `String(2048)` | nullable; path within the artifact |
-| `status` | `String(20)` | default `'draft'` |
+| `status` | `String(20)` | default `'active'` |
 | `created_by` | `String(256)` | |
 | `last_updated_by` | `String(256)` | |
 | `creation_timestamp` | `BigInteger` | millis since epoch |
@@ -113,7 +113,7 @@ PrimaryKey: `(workspace, organization, name)`.
 | `source_type` | `String(20)` | optional; `git`, `oci`, `zip`, `mlflow` |
 | `source` | `String(2048)` | optional pointer to agent plugin |
 | `subpath` | `String(2048)` | nullable; path within the artifact |
-| `status` | `String(20)` | default `'draft'` |
+| `status` | `String(20)` | default `'active'` |
 | `created_by` | `String(256)` | |
 | `last_updated_by` | `String(256)` | |
 | `creation_timestamp` | `BigInteger` | millis since epoch |
@@ -261,7 +261,7 @@ class SkillVersion:
     source_type: SkillSourceType | None = None
     source: str | None = None
     subpath: str | None = None
-    status: SkillStatus = SkillStatus.DRAFT
+    status: SkillStatus = SkillStatus.ACTIVE
 
     tags: dict[str, str] = field(default_factory=dict)
     aliases: list[str] = field(default_factory=list)
@@ -422,7 +422,7 @@ class AgentPluginVersion:
     source: str | None = None
     subpath: str | None = None
 
-    status: SkillStatus = SkillStatus.DRAFT
+    status: SkillStatus = SkillStatus.ACTIVE
     tags: dict[str, str] = field(default_factory=dict)
     skills: list[str] = field(default_factory=list)
     aliases: list[str] = field(default_factory=list)
@@ -575,7 +575,7 @@ class SkillRegistryMixin:
         source_type: str | None = None,
         source: str | None = None,
         subpath: str | None = None,
-        status: str = "draft",
+        status: str = "active",
     ) -> SkillVersion:
         raise NotImplementedError(self.__class__.__name__)
 
@@ -830,7 +830,7 @@ def register_skill(
     organization: str = "",
     source: str | None = None,
     subpath: str | None = None,
-    status: str = "draft",
+    status: str = "active",
 ) -> SkillVersion:
     """Register a skill version. The server assigns the next
     monotonic integer version. Auto-creates the parent Skill if
@@ -1237,7 +1237,7 @@ class CreateSkillVersionRequest(BaseModel):
     organization: str = ""  # for POST /register only; ignored for versioned paths
     source: str | None = None
     subpath: str | None = None
-    status: str = "draft"
+    status: str = "active"
 
 
 class UpdateSkillVersionRequest(BaseModel):
@@ -1286,7 +1286,7 @@ class SkillVersionResponse(BaseModel):
     source_type: str | None = None
     source: str | None = None
     subpath: str | None = None
-    status: str = "draft"
+    status: str = "active"
     aliases: list[str] = Field(default_factory=list)
     tags: dict[str, str] = Field(default_factory=dict)
     created_by: str | None = None
@@ -1316,7 +1316,7 @@ class AgentPluginVersionResponse(BaseModel):
     source_type: str | None = None
     source: str | None = None
     subpath: str | None = None
-    status: str = "draft"
+    status: str = "active"
     skills: list[str] = Field(default_factory=list)
     aliases: list[str] = Field(default_factory=list)
     tags: dict[str, str] = Field(default_factory=dict)
