@@ -709,6 +709,7 @@ class SkillRegistryMixin:
         source_type: str | None = None,
         source: str | None = None,
         subpath: str | None = None,
+        status: str = "active",
     ) -> AgentPluginVersion:
         raise NotImplementedError(self.__class__.__name__)
 
@@ -934,6 +935,7 @@ def create_agent_plugin_version(
     skills: list[str] | None = None,
     source: str | None = None,
     subpath: str | None = None,
+    status: str = "active",
 ) -> AgentPluginVersion: ...
 
 
@@ -1258,6 +1260,7 @@ class CreateAgentPluginVersionRequest(BaseModel):
     skills: list[str] | None = None
     source: str | None = None
     subpath: str | None = None
+    status: str = "active"
 
 
 class UpdateAgentPluginVersionRequest(BaseModel):

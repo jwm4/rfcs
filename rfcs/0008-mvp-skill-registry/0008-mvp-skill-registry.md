@@ -322,14 +322,16 @@ MLflow's
 [LLM judges](https://mlflow.org/docs/latest/genai/eval-monitor/scorers/)
 can autonomously explore execution traces via MCP tools.
 
-1. Register a new version of the agent plugin with updated members:
+1. Register a new skill version and create a draft agent plugin
+   version for evaluation:
    ```bash
    mlflow skills register --skill-uri skills:/code-review \
        --source https://github.com/acme/agent-skills.git@v2.0.0 \
        --subpath code-review
    mlflow agent-plugins create-version --skill-uri skills:/pr-workflow \
        --skill skills:/code-review/2 \
-       --skill skills:/style-check/1
+       --skill skills:/style-check/1 \
+       --status draft
    ```
 2. Pull version 1, install it into the harness manually, and run it
    on a set of test inputs. Traces are recorded in MLflow under
@@ -386,19 +388,20 @@ both against the same inputs and scorers.
 
 1. A CI job (e.g., GitHub Actions) triggers on pushes to the skill
    source repo.
-2. The job registers a new skill version from the updated source:
+2. The job registers a new skill version and creates a draft agent
+   plugin version for evaluation:
    ```bash
    mlflow skills register --skill-uri skills:/code-review \
        --source https://github.com/acme/agent-skills.git@v1.1.0 \
        --subpath code-review
    mlflow agent-plugins create-version --skill-uri skills:/pr-workflow \
        --skill skills:/code-review/2 \
-       --skill skills:/style-check/1
+       --skill skills:/style-check/1 \
+       --status draft
    ```
-3. The job pulls the new agent plugin version, manually installs it into the
-   harness, and runs it against a
-   benchmark dataset, collecting traces in a dedicated MLflow
-   experiment.
+3. The job pulls the new agent plugin version, manually installs it
+   into the harness, and runs it against a benchmark dataset,
+   collecting traces in a dedicated MLflow experiment.
 4. The job runs
    [LLM judge](https://mlflow.org/docs/latest/genai/eval-monitor/scorers/)
    evaluation on the collected traces, producing scored results.
