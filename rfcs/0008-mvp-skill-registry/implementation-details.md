@@ -109,7 +109,12 @@ PrimaryKey: `(workspace, organization, name)`.
 | `workspace` | `String(63)` | PK, FK to `agent_plugins` |
 | `organization` | `String(256)` | PK, FK to `agent_plugins` |
 | `name` | `String(256)` | PK, FK to `agent_plugins` |
-| `version` | `Integer` | PK, server-assigned monotonic integer |
+| `version` | `String(256)` | PK; equal to canonical `plugin_json["version"]` |
+| `version_major` | `Integer` | nullable; extracted for valid SemVer values |
+| `version_minor` | `Integer` | nullable; extracted for valid SemVer values |
+| `version_patch` | `Integer` | nullable; extracted for valid SemVer values |
+| `plugin_json` | `JSON` | immutable canonical Agent Plugins manifest |
+| `search_text` | `Text` | derived discovery projection of manifest description, keywords, and author name |
 | `source_type` | `String(20)` | optional; `git`, `oci`, `zip`, `mlflow` |
 | `source` | `String(2048)` | optional pointer to agent plugin |
 | `subpath` | `String(2048)` | nullable; path within the artifact |
@@ -120,8 +125,19 @@ PrimaryKey: `(workspace, organization, name)`.
 | `last_updated_timestamp` | `BigInteger` | millis since epoch |
 
 FK: `(workspace, organization, name)` references `agent_plugins`,
-CASCADE delete. Version ordering and index follow the same pattern
-as `skill_versions`.
+CASCADE delete.
+
+**Version ordering.** Latest resolution first selects active candidates, or
+non-deleted non-active candidates when none are active. When every candidate is
+valid SemVer, semantic precedence determines the result. If any candidate is
+not valid SemVer, `creation_timestamp DESC` determines the result. The nullable
+numeric components narrow semantic candidates efficiently; full prerelease
+precedence is applied in application code. Creation time breaks equal semantic
+precedence, including versions that differ only in build metadata.
+
+**Index:** `ix_agent_plugin_versions_latest_lookup` on `(workspace,
+organization, name, status, version_major, version_minor, version_patch,
+creation_timestamp)` supports both resolution paths.
 
 ### `agent_plugin_version_members`
 
@@ -130,7 +146,7 @@ as `skill_versions`.
 | `plugin_workspace` | `String(63)` | PK, FK to `agent_plugin_versions` |
 | `plugin_organization` | `String(256)` | PK, FK to `agent_plugin_versions` |
 | `plugin_name` | `String(256)` | PK, FK to `agent_plugin_versions` |
-| `plugin_version` | `Integer` | PK, FK to `agent_plugin_versions` |
+| `plugin_version` | `String(256)` | PK, FK to `agent_plugin_versions` |
 | `member_organization` | `String(256)` | PK, FK to `skill_versions` |
 | `member_name` | `String(256)` | PK, FK to `skill_versions` |
 | `member_version` | `Integer` | PK, FK to `skill_versions` |
@@ -161,7 +177,7 @@ the skill FK.
 | `workspace` | `String(63)` | PK, FK to `agent_plugin_versions` |
 | `organization` | `String(256)` | PK, FK to `agent_plugin_versions` |
 | `name` | `String(256)` | PK, FK to `agent_plugin_versions` |
-| `version` | `Integer` | PK, FK to `agent_plugin_versions` |
+| `version` | `String(256)` | PK, FK to `agent_plugin_versions` |
 | `key` | `String(256)` | PK |
 | `value` | `Text` | |
 
@@ -173,7 +189,13 @@ the skill FK.
 | `organization` | `String(256)` | PK, FK to `agent_plugins` |
 | `name` | `String(256)` | PK, FK to `agent_plugins` |
 | `alias` | `String(256)` | PK |
-| `version` | `Integer` | target agent plugin version |
+| `version` | `String(256)` | target agent plugin manifest version |
+
+**Canonical manifest storage.** `plugin_json` uses SQLAlchemy's `JSON` type,
+following RFC-0004's `server_json` precedent. It maps to native JSON where the
+database supports it and to the platform's text-backed JSON representation for
+SQLite and SQL Server. The full payload is preserved, while identity, ordering,
+and search projections are materialized separately.
 
 **Workspace handling.** All tables carry a `workspace` column as part
 of the composite key. Single-tenant deployments use `'default'`.
@@ -208,6 +230,7 @@ used by the Model Registry and RFC-0004:
 ```python
 from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import Any
 
 
 class SkillStatus(StrEnum):
@@ -372,9 +395,9 @@ to different content, register a new version. Mutable fields
 
 ### AgentPlugin entity
 
-An agent plugin groups related skills into a governed unit that maps
-to the "plugin" concept in agent harnesses. Follows the same
-top-level pattern as Skill: versions, tags, and aliases.
+An agent plugin is the stable governed identity for an open Agent Plugins
+package. It follows the same top-level MLflow pattern as Skill while deriving
+its canonical name and version metadata from immutable manifests.
 
 ```python
 @dataclass
@@ -385,22 +408,23 @@ class AgentPlugin:
     workspace: str | None = None
     status: SkillStatus | None = None  # read-only, derived from parent-resolved version
     tags: dict[str, str] = field(default_factory=dict)
-    aliases: dict[str, int] = field(default_factory=dict)  # read-only; populated from agent_plugin_aliases table
-    latest_version: int | None = None  # read-only, shared latest-resolution rule
+    aliases: dict[str, str] = field(default_factory=dict)  # read-only; manifest version targets
+    latest_version: str | None = None  # read-only, Agent Plugin resolution rule
     created_by: str | None = None
     last_updated_by: str | None = None
     creation_timestamp: int | None = None
     last_updated_timestamp: int | None = None
 ```
 
-`AgentPlugin.status` is read-only and uses the same parent-resolved
-version rule as `Skill`: highest active version number if present,
-otherwise highest non-deleted non-active version number. Latest
-version resolution follows the same fallback.
+`AgentPlugin.status` is read-only and comes from the same latest-resolved
+version as `latest_version`. Parent `description` is mutable MLflow presentation
+metadata. When unset, the UI may fall back to the resolved
+`plugin_json["description"]`; the API returns the parent value as stored.
 
 ### AgentPluginVersion entity
 
-A versioned snapshot of an agent plugin's membership. In this RFC, all
+A versioned snapshot of the canonical package manifest, source authority,
+lifecycle state, and optional registered-skill membership. In this RFC, all
 members are skills.
 
 Agent plugin members are referenced by URI string rather than a separate
@@ -416,8 +440,9 @@ convention:
 @dataclass
 class AgentPluginVersion:
     name: str
-    version: int
+    version: str
     organization: str = ""
+    plugin_json: dict[str, Any] = field(default_factory=dict)
     source_type: SkillSourceType | None = None
     source: str | None = None
     subpath: str | None = None
@@ -436,7 +461,34 @@ class AgentPluginVersion:
 ### AgentPluginVersion field details
 
 **Version uniqueness.** The combination of
-`(workspace, organization, name, version)` is unique.
+`(workspace, organization, name, version)` is unique. `name` and `version` are
+extracted from the canonical payload, and an explicitly supplied path name must
+match `plugin_json["name"]`.
+
+**Canonical manifest.** `plugin_json` is validated using the declared Agent
+Plugins schema. Initially MLflow recognizes only v1.0.0. Fatal violations and
+unsupported schema identifiers reject creation. Unknown top-level fields and a
+non-object `extensions` field generate nonfatal warnings, remain preserved in
+the stored payload, and receive no MLflow semantics. The payload is immutable
+after creation.
+
+**Optional manifest version.** When `plugin_json["version"]` is present, MLflow
+uses it unchanged. When absent for a new plugin, MLflow inserts `0.1.0`. When
+absent for an existing plugin, MLflow inserts a unique valid SemVer chosen by a
+simple implementation-defined heuristic. In every stored entity,
+`version == plugin_json["version"]`.
+
+**Manifest synthesis.** For an assembled plugin, both registration and
+low-level version creation may receive `plugin_json=None`. The server-side
+registry layer synthesizes a minimal valid manifest using the parent name and
+generated version before storing the entity. Monolithic import always supplies
+a complete manifest after validation or adapter translation. Persistence never
+stores a null or incomplete canonical payload.
+
+**Latest resolution.** Active candidates take precedence. When all eligible
+candidates are valid SemVer, semantic precedence selects latest. If semantic
+ordering is unavailable, creation time selects latest. The same fallback is
+applied to non-deleted non-active candidates when no active version exists.
 
 **Agent plugin-level source.** An agent plugin version is either monolithic or
 assembled, never both. All versions of a given agent plugin must be the
@@ -462,19 +514,20 @@ The API rejects a member URI with a `#subpath` fragment when the
 member version has its own source. It also rejects a source-less member
 of a monolithic agent plugin when the URI lacks a `#subpath` fragment.
 
-**Immutability contract.** The member list and source fields of an
-agent plugin version are immutable after creation. To change the set of
-members or source pointer, register a new agent plugin version. Mutable
-fields (`status`, `tags`) can be updated independently.
+**Immutability contract.** `plugin_json`, the member list, and source fields of
+an agent plugin version are immutable after creation. To change the canonical
+manifest, members, or source pointer, register a new agent plugin version.
+Mutable fields (`status`, `tags`) can be updated independently.
 
-Correctness of the artifact layout is the publisher's responsibility;
-the registry does not validate artifact contents at registration time.
+The low-level registry API validates the manifest but does not fetch a remote
+artifact to validate its layout. Client-side import performs format-specific
+filesystem discovery and containment validation before registration.
 
 A member can appear in multiple agent plugins and multiple agent plugin versions.
 Membership is at the version level, so an agent plugin version is a
 reproducible snapshot of "these specific skill versions work together."
 
-### Skill URI format
+### Skill and Agent Plugin URI formats
 
 Skill URIs are used for CLI target identification and agent plugin
 member lists, following the `models:/name/version` convention
@@ -499,8 +552,22 @@ are present, the second is either a version (if it parses as an
 integer) or the URI is `organization/name` (if it does not). When
 one segment is present, it is the name with no organization.
 
-In the CLI, every command that targets a skill or agent plugin accepts a
-`--skill-uri` flag (parallel to `--model-uri` in `mlflow models`).
+Agent plugins use a separate, fixed-shape URI because their versions are
+strings. The empty organization is always represented by `_`:
+
+| Pattern | Meaning | Example |
+|---------|---------|---------|
+| `agent-plugins:/org-or-_/name` | Agent plugin parent | `agent-plugins:/_/pr-workflow` |
+| `agent-plugins:/org-or-_/name/version` | Exact version | `agent-plugins:/_/pr-workflow/1.0.0-beta.11` |
+| `agent-plugins:/org-or-_/name@alias` | Resolve through an alias | `agent-plugins:/_/pr-workflow@production` |
+
+Agent plugin versions in URIs must be nonempty, fit within the database field,
+and cannot contain `/`, `@`, `#`, or `?`. They do not need to be valid SemVer.
+The fixed organization segment means the parser never needs to guess whether a
+string is a name or version.
+
+In the CLI, skill commands accept `--skill-uri` and agent plugin commands
+accept `--plugin-uri`.
 In agent plugin member lists, URIs appear as plain strings in `list[str]`.
 The server parses the URI into its constituent fields
 (`member_organization`, `member_name`, `member_version`,
@@ -546,6 +613,7 @@ class SkillRegistryMixin:
 
     def search_skills(
         self,
+        search_text: str | None = None,
         filter_string: str | None = None,
         max_results: int = SEARCH_MAX_RESULTS_DEFAULT,
         order_by: list[str] | None = None,
@@ -679,6 +747,7 @@ class SkillRegistryMixin:
 
     def search_agent_plugins(
         self,
+        search_text: str | None = None,
         filter_string: str | None = None,
         max_results: int = SEARCH_MAX_RESULTS_DEFAULT,
         order_by: list[str] | None = None,
@@ -705,6 +774,7 @@ class SkillRegistryMixin:
         self,
         name: str,
         organization: str = "",
+        plugin_json: dict[str, Any] | None = None,
         skills: list[str] | None = None,
         source_type: str | None = None,
         source: str | None = None,
@@ -714,7 +784,7 @@ class SkillRegistryMixin:
         raise NotImplementedError(self.__class__.__name__)
 
     def get_agent_plugin_version(
-        self, name: str, version: int,
+        self, name: str, version: str,
         organization: str = "",
     ) -> AgentPluginVersion:
         raise NotImplementedError(self.__class__.__name__)
@@ -744,14 +814,14 @@ class SkillRegistryMixin:
     def update_agent_plugin_version(
         self,
         name: str,
-        version: int,
+        version: str,
         organization: str = "",
         status: SkillStatus | None = NOT_SET,
     ) -> AgentPluginVersion:
         raise NotImplementedError(self.__class__.__name__)
 
     def delete_agent_plugin_version(
-        self, name: str, version: int,
+        self, name: str, version: str,
         organization: str = "",
     ) -> None:
         raise NotImplementedError(self.__class__.__name__)
@@ -771,14 +841,14 @@ class SkillRegistryMixin:
         raise NotImplementedError(self.__class__.__name__)
 
     def set_agent_plugin_version_tag(
-        self, name: str, version: int,
+        self, name: str, version: str,
         key: str, value: str,
         organization: str = "",
     ) -> None:
         raise NotImplementedError(self.__class__.__name__)
 
     def delete_agent_plugin_version_tag(
-        self, name: str, version: int, key: str,
+        self, name: str, version: str, key: str,
         organization: str = "",
     ) -> None:
         raise NotImplementedError(self.__class__.__name__)
@@ -786,7 +856,7 @@ class SkillRegistryMixin:
     # --- AgentPlugin alias operations ---
 
     def set_agent_plugin_alias(
-        self, name: str, alias: str, version: int,
+        self, name: str, alias: str, version: str,
         organization: str = "",
     ) -> None:
         raise NotImplementedError(self.__class__.__name__)
@@ -861,6 +931,7 @@ def get_skill(*, name: str, organization: str = "") -> Skill: ...
 
 def search_skills(
     *,
+    search_text: str | None = None,
     filter_string: str | None = None,
     max_results: int = 100,
     order_by: list[str] | None = None,
@@ -932,6 +1003,7 @@ def create_agent_plugin_version(
     *,
     name: str,
     organization: str = "",
+    plugin_json: dict[str, Any] | None = None,
     skills: list[str] | None = None,
     source: str | None = None,
     subpath: str | None = None,
@@ -939,11 +1011,26 @@ def create_agent_plugin_version(
 ) -> AgentPluginVersion: ...
 
 
+def register_agent_plugin(
+    *,
+    plugin_json: dict[str, Any] | None = None,
+    name: str | None = None,
+    organization: str = "",
+    skills: list[str] | None = None,
+    source: str | None = None,
+    subpath: str | None = None,
+    status: str = "active",
+) -> AgentPluginVersion:
+    """Validate or synthesize a canonical manifest, create or reuse the
+    parent AgentPlugin, and register one immutable version."""
+
+
 def get_agent_plugin(*, name: str, organization: str = "") -> AgentPlugin: ...
 
 
 def search_agent_plugins(
     *,
+    search_text: str | None = None,
     filter_string: str | None = None,
     max_results: int = 100,
     order_by: list[str] | None = None,
@@ -963,7 +1050,7 @@ def delete_agent_plugin(*, name: str, organization: str = "") -> None: ...
 
 
 def get_agent_plugin_version(
-    *, name: str, version: int, organization: str = "",
+    *, name: str, version: str, organization: str = "",
 ) -> AgentPluginVersion: ...
 
 
@@ -989,13 +1076,13 @@ def search_agent_plugin_versions(
 def update_agent_plugin_version(
     *,
     name: str,
-    version: int,
+    version: str,
     organization: str = "",
     status: str | None = NOT_SET,
 ) -> AgentPluginVersion: ...
 
 
-def delete_agent_plugin_version(*, name: str, version: int, organization: str = "") -> None: ...
+def delete_agent_plugin_version(*, name: str, version: str, organization: str = "") -> None: ...
 
 
 def set_skill_tag(*, name: str, key: str, value: str, organization: str = "") -> None: ...
@@ -1014,11 +1101,11 @@ def set_agent_plugin_tag(*, name: str, key: str, value: str, organization: str =
 
 def delete_agent_plugin_tag(*, name: str, key: str, organization: str = "") -> None: ...
 
-def set_agent_plugin_version_tag(*, name: str, version: int, key: str, value: str, organization: str = "") -> None: ...
+def set_agent_plugin_version_tag(*, name: str, version: str, key: str, value: str, organization: str = "") -> None: ...
 
-def delete_agent_plugin_version_tag(*, name: str, version: int, key: str, organization: str = "") -> None: ...
+def delete_agent_plugin_version_tag(*, name: str, version: str, key: str, organization: str = "") -> None: ...
 
-def set_agent_plugin_alias(*, name: str, alias: str, version: int, organization: str = "") -> None: ...
+def set_agent_plugin_alias(*, name: str, alias: str, version: str, organization: str = "") -> None: ...
 
 def delete_agent_plugin_alias(*, name: str, alias: str, organization: str = "") -> None: ...
 
@@ -1038,15 +1125,20 @@ class IntrospectedSkill:
 
 @dataclass
 class PluginIntrospectionResult:
+    detected_format: str
     plugin_name: str | None
+    plugin_json: dict[str, Any]
     skills: list[IntrospectedSkill]
+    recognized_unregistered_content: list[str]
     warnings: list[PluginImportWarning]
 
 
 @dataclass
 class PluginImportResult:
+    detected_format: str
     plugin_version: AgentPluginVersion
     skill_versions: list[SkillVersion]
+    recognized_unregistered_content: list[str]
     warnings: list[PluginImportWarning]
 
 
@@ -1067,12 +1159,11 @@ def import_plugin(
 ) -> PluginImportResult:
     """Import a plugin as a monolithic agent plugin.
 
-    Discovers skill directories (subdirectories containing a SKILL.md
-    entry point), registers them, preserves the plugin source on the
-    agent plugin version, and returns warnings for non-skill content that is
-    included in the agent plugin but does not receive individual registry
-    entries. If plugin_name is omitted, it is inferred from the source
-    directory name. The server infers source_type from the URL scheme.
+    Auto-detects Agent Plugins, Claude Code, or generic skill-directory input;
+    validates or constructs canonical plugin_json; discovers and registers
+    skills; and preserves the package source. Recognized mcp.json content is
+    reported but not registered. plugin_name is used only when the selected
+    adapter cannot derive a name. The server infers source_type from the URL.
     """
 
 
@@ -1081,7 +1172,7 @@ def pull(
     name: str | None = None,
     organization: str = "",
     entity_type: str = "skill",
-    version: int | None = None,
+    version: int | str | None = None,
     alias: str | None = None,
     destination: str = ".",
 ) -> str:
@@ -1132,6 +1223,14 @@ parameter. This keeps SDKs as thin REST wrappers, avoids
 reimplementing inference in every language, and prepares for future
 server-side content inspection (e.g., signature verification).
 
+For agent plugins, `POST /register` and version creation validate the submitted
+canonical `plugin_json`. The server extracts and checks `name`, preserves a
+supplied version string, or assigns and inserts a valid SemVer string when it is
+absent. The server does not fetch remote package content. Client-side
+`import_plugin()` performs source fetching, format detection, filesystem
+validation, and adapter translation before submitting the canonical payload and
+member references.
+
 There is no skill-registry content-upload endpoint. When `source` is
 a local path, the client creates a version record with null source to
 obtain the server-assigned version number, then uploads through
@@ -1177,6 +1276,7 @@ All paths relative to the logical agent-plugins router prefix.
 |---|---|---|
 | `POST` | `/` | Create an agent plugin |
 | `GET` | `/` | Search agent plugins |
+| `POST` | `/register` | Validate or synthesize `plugin_json`, create or reuse the parent, and create a version |
 | `GET` | `/{organization}/{name}` | Get agent plugin by organization and name |
 | `PATCH` | `/{organization}/{name}` | Update agent plugin fields |
 | `DELETE` | `/{organization}/{name}` | Hard-delete agent plugin (cascades versions and memberships) |
@@ -1194,34 +1294,47 @@ All paths relative to the logical agent-plugins router prefix.
 | `DELETE` | `/{organization}/{name}/aliases/{alias}` | Delete an agent plugin alias |
 
 Same `_` placeholder convention for empty organization as skill
-endpoints.
+endpoints. Agent plugin version path values follow the same length and reserved
+character validation as Agent Plugin URIs.
 
 ### Pagination and filtering
 
 Search endpoints use page-token-based pagination and `filter_string`
-expressions following existing MLflow conventions.
+expressions following existing MLflow conventions. Parent search endpoints also
+accept `search_text`, which is combined with `filter_string` using logical AND.
 
-**Skills:** `name LIKE '%review%'`, `status = 'active'`,
-`tags.team = 'platform'`
+**Skills:** free-text matches name and description. Structured examples include
+`name LIKE '%review%'`, `description LIKE '%security%'`,
+`organization = 'acme'`, `status = 'active'`, and `tags.team = 'platform'`.
 
-**Agent plugins:** Same as skills, plus `member_name = 'code-review'` to
-find agent plugins that include a given skill (reverse membership lookup)
+**Agent plugins:** free-text matches name, mutable parent description,
+organization, and the latest-resolved manifest's description, keywords, and
+author name. Structured filters are the same as Skills, plus
+`member_name = 'code-review'` to find agent plugins that include a given skill.
+If a lifecycle transition changes which version resolves as latest, the
+manifest-derived free-text matches for the parent change accordingly.
 
 **Versions (all entity types):** `status = 'active'`,
-`source_type = 'git'`, `tags.approved = 'true'`
+`organization = 'acme'`, `source_type = 'git'`, and
+`tags.approved = 'true'`.
+
+Manifest keywords are not copied into MLflow tags. A derived version-level
+search projection supports portable free-text matching while `plugin_json`
+remains canonical.
 
 ### Request and response models
 
-Request models contain only the mutable fields; resource identifiers
-come from path parameters (`organization` and `name`), with one
-exception: `POST /register` accepts `name` and `organization` in
-the request body (`name` is optional, inferred from source content
-when omitted; `organization` defaults to `""`) and returns the
-created skill identity. This parallels RFC-0004's top-level
-`register_mcp_server()` pattern:
+Version-creation requests include immutable creation payloads and mutable
+initial status; later update requests contain only mutable fields. Resource
+identifiers normally come from path parameters. The Skill and Agent Plugin
+`POST /register` endpoints accept identity inputs in the body so they can create
+or reuse the parent and create a version in one operation. Agent Plugin identity
+is extracted from or checked against `plugin_json`.
 
 ```python
-from pydantic import BaseModel, Field
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class CreateSkillRequest(BaseModel):
@@ -1256,25 +1369,56 @@ class UpdateAgentPluginRequest(BaseModel):
     description: str | None = None
 
 
+class PluginJSONPayload(BaseModel):
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+
+    schema_: str = Field(alias="$schema")
+    name: str
+    version: str | None = None
+    description: str | None = None
+    author: dict[str, str] | None = None
+    homepage: str | None = None
+    repository: str | None = None
+    license: str | None = None
+    keywords: list[str] | None = None
+    extensions: Any = None
+
+
 class CreateAgentPluginVersionRequest(BaseModel):
+    plugin_json: PluginJSONPayload | None = None
     skills: list[str] | None = None
     source: str | None = None
     subpath: str | None = None
     status: str = "active"
 
 
+class RegisterAgentPluginRequest(CreateAgentPluginVersionRequest):
+    name: str | None = None
+    organization: str = ""
+
+
 class UpdateAgentPluginVersionRequest(BaseModel):
     status: str | None = None
 
 
-class AliasResponse(BaseModel):
+class SkillAliasResponse(BaseModel):
     alias: str
     version: int
 
 
-class SetAliasRequest(BaseModel):
+class SetSkillAliasRequest(BaseModel):
     alias: str
     version: int
+
+
+class AgentPluginAliasResponse(BaseModel):
+    alias: str
+    version: str
+
+
+class SetAgentPluginAliasRequest(BaseModel):
+    alias: str
+    version: str
 
 
 class SetTagRequest(BaseModel):
@@ -1304,7 +1448,7 @@ class SkillResponse(BaseModel):
     description: str | None = None
     status: str | None = None
     latest_version: int | None = None
-    aliases: list[AliasResponse] = Field(default_factory=list)
+    aliases: list[SkillAliasResponse] = Field(default_factory=list)
     tags: dict[str, str] = Field(default_factory=dict)
     created_by: str | None = None
     last_updated_by: str | None = None
@@ -1314,8 +1458,9 @@ class SkillResponse(BaseModel):
 
 class AgentPluginVersionResponse(BaseModel):
     name: str
-    version: int
+    version: str
     organization: str = ""
+    plugin_json: dict[str, Any]
     source_type: str | None = None
     source: str | None = None
     subpath: str | None = None
@@ -1334,8 +1479,8 @@ class AgentPluginResponse(BaseModel):
     organization: str = ""
     description: str | None = None
     status: str | None = None
-    latest_version: int | None = None
-    aliases: list[AliasResponse] = Field(default_factory=list)
+    latest_version: str | None = None
+    aliases: list[AgentPluginAliasResponse] = Field(default_factory=list)
     tags: dict[str, str] = Field(default_factory=dict)
     created_by: str | None = None
     last_updated_by: str | None = None
@@ -1343,10 +1488,9 @@ class AgentPluginResponse(BaseModel):
     last_updated_timestamp: int | None = None
 ```
 
-`Skill.aliases` is modeled as a `dict[str, int]` in the entity layer
-for convenience, while REST responses expose aliases as
-`list[AliasResponse]` to keep the payload shape explicit and
-consistent with the MCP Server Registry (RFC-0004).
+Aliases are modeled as dictionaries on parent entities for convenience, while
+REST responses expose explicit lists. Skill alias targets are integers and
+agent plugin alias targets are strings.
 
 **Composite primary keys.** Skills and agent plugins use a
 `(workspace, organization, name)` composite primary key. The
@@ -1360,9 +1504,19 @@ workspace, consistent with the MCP Server Registry (RFC-0004).
 The Prompt Registry is considering adding `organization` for
 similar reasons; this design aligns with that direction.
 
-**Name and organization validation.** The server rejects
-`organization` and `name` values that would create ambiguity in
-URIs, REST paths, or artifact storage paths:
+**Canonical manifest validation.** `PluginJSONPayload` provides typed access to
+known fields, while validation logic implements the Agent Plugins failure
+boundaries that cannot be expressed by a strict Pydantic model alone. Only the
+canonical v1.0.0 `$schema` identifier is initially recognized. Unknown
+top-level fields and a non-object `extensions` field are preserved and reported
+as nonfatal warnings but ignored semantically. Other schema violations are
+fatal. `plugin_json["name"]` must match an explicit path or request name. The
+optional version is generated and inserted before the immutable payload is
+stored.
+
+**Name and organization validation.** The server rejects `organization` and
+skill `name` values that would create ambiguity in URIs, REST paths, or artifact
+storage paths:
 
 - `organization` cannot be `_` (reserved as the empty-organization
   placeholder in REST paths and artifact paths).
@@ -1372,17 +1526,21 @@ URIs, REST paths, or artifact storage paths:
 - Neither field may contain `/`, `@`, `#`, or `?` (URI-significant
   characters).
 
+Agent plugin names instead follow the canonical Agent Plugins constraints:
+1–64 lowercase ASCII letters, digits, hyphens, and periods; alphanumeric first
+and last characters; and no consecutive hyphens or periods. MLflow applies the
+same organization constraints around that standard name.
+
 ## Python SDK and CLI
 
 The `mlflow.genai` module exposes the public registry functions,
 delegating to `MlflowClient`, plus client-side import and pull
 operations that compose those registry functions. Skill-specific
 entity and request types are also re-exported from `mlflow.genai`.
-The `mlflow skills` CLI command group provides the same operations
-from the command line. CLI commands accept `--name` and optional
-`--organization` flags for entity identification, and
-`--skill-uri` as a convenience that parses name, organization,
-and version from a URI:
+The `mlflow skills` and `mlflow agent-plugins` CLI command groups provide the
+same operations from the command line. Commands accept `--name` and optional
+`--organization` flags for entity identification. Skill commands also accept
+`--skill-uri`, while agent plugin commands accept `--plugin-uri`:
 
 | CLI subcommand | SDK function | Description |
 |---|---|---|
@@ -1395,7 +1553,8 @@ and version from a URI:
 | `mlflow skills set-tag` | `set_skill_tag()` | Set a tag |
 | `mlflow skills pull` | `pull()` | Pull content to local filesystem |
 | `mlflow agent-plugins create` | `create_agent_plugin()` | Create an agent plugin |
-| `mlflow agent-plugins create-version` | `create_agent_plugin_version()` | Create an agent plugin version with members |
+| `mlflow agent-plugins create-version` | `create_agent_plugin_version()` | Create a version on an existing parent |
+| `mlflow agent-plugins register` | `register_agent_plugin()` | Create or reuse the parent and register a canonical version |
 | `mlflow agent-plugins get` | `get_agent_plugin()` | Get agent plugin metadata |
 | `mlflow agent-plugins search` | `search_agent_plugins()` | Search agent plugins |
 | `mlflow agent-plugins search-versions` | `search_agent_plugin_versions()` | Search agent plugin versions |
@@ -1405,6 +1564,12 @@ and version from a URI:
 | `mlflow agent-plugins update-version` | `update_agent_plugin_version()` | Update agent plugin version status |
 | `mlflow agent-plugins introspect` | `introspect_plugin()` | Preview a local or remote plugin without registry writes |
 | `mlflow agent-plugins import` | `import_plugin()` | Import a plugin as a monolithic agent plugin |
+
+`create-version` and `register` accept `--plugin-json PATH` for a full standard
+manifest. When omitted for an assembled plugin, the command synthesizes a
+minimal manifest from `--name` or `--plugin-uri` and assigns a version according
+to the generation rule. Search commands expose `--search-text` separately from
+`--filter`.
 
 **Relationship to existing `mlflow skills` subcommands.** MLflow already
 has `mlflow skills list` and `mlflow skills view` subcommands
@@ -1424,33 +1589,35 @@ The registry server does not fetch user-supplied plugin URLs.
 
 `introspect_plugin()` and `mlflow agent-plugins introspect` run the same plugin
 discovery used by import but do not create or modify registry records.
-They accept either a local path or a remote Git, OCI, ZIP, or MLflow
-artifact source and return the discovered skill names and paths,
-available plugin name metadata, and warnings for unregistered
-non-skill content. The server infers `source_type` from the source
-value using the same rules as registration.
+They accept either a local path or a remote Git, OCI, ZIP, or MLflow artifact
+source and return the detected format, canonical manifest preview, discovered
+skill names and paths, recognized unregistered content such as `mcp.json`, and
+warnings. The server infers `source_type` from the source value using the same
+rules as registration.
 
-### Supported input format
+### Supported input formats
 
-Import expects a standard layout: a directory tree where each skill is
-a subdirectory containing a SKILL.md entry point. This layout is used
-by Claude Code and other harnesses. The importer:
+The importer:
 
 1. Fetches the Git, OCI, ZIP, or MLflow artifact source using the same
    source-type-aware logic as `pull`.
 2. Applies `subpath`, when provided, to select the plugin root.
-3. Reads `.claude-plugin/plugin.json` when present to obtain supported
-   plugin metadata such as name. An explicit `plugin_name` argument
-   takes precedence. Version is server-assigned at import time.
-4. Discovers skill directories that contain a SKILL.md entry point.
-   The SKILL.md name is used when present; otherwise the directory
-   name is used.
-5. Detects non-skill content for warning purposes only.
+3. Checks for a root `plugin.json` declaring the Agent Plugins v1.0.0 schema.
+   When found, it validates the manifest and discovers immediate children at
+   `skills/*/SKILL.md`. A declared but invalid standard manifest fails import.
+   A manifest declaring an unsupported Agent Plugins schema version also fails.
+4. Otherwise checks for `.claude-plugin/plugin.json`, translates available
+   metadata into canonical `plugin_json`, and applies Claude Code discovery.
+5. Otherwise applies the existing generic skill-directory discovery and
+   synthesizes a minimal canonical manifest. `plugin_name` is used only when
+   the adapter cannot infer a name.
+6. Reports root `mcp.json` as recognized but unregistered standard content and
+   reports other non-skill content without assigning membership semantics.
 
-The resulting agent plugin name must be available after explicit
-arguments and plugin metadata are considered. The version is
-server-assigned. The server infers `source_type` from the source
-value using the same rules as registration.
+When multiple markers exist, the standard root manifest takes precedence. The
+canonical name follows the Agent Plugins naming constraints. A supplied
+manifest version is preserved; an omitted version is generated and inserted as
+specified above.
 
 ### Registration behavior
 
@@ -1462,17 +1629,18 @@ directory as the `#subpath` fragment in the member URI (e.g.,
 
 After registering the embedded skills, the importer creates one
 monolithic `AgentPluginVersion` with the original `source_type`,
-`source`, and `subpath`, plus member references for all discovered
-skills. This preserves a pullable link to the complete original plugin
-while keeping registry entries limited to skills.
-
-The import fails if no skills are discovered.
+`source`, and `subpath`, the immutable canonical `plugin_json`, and member
+references for all discovered skills. This preserves a pullable link to the
+complete original package while keeping registry membership limited to skills.
+A valid package with no skills creates an agent plugin version with an empty
+member list.
 
 #### Re-import behavior
 
-When the target agent plugin already has at least one version, import
+When the target agent plugin already has at least one version, import first
+rejects an incoming canonical version that already exists. It then
 matches discovered skills to existing members using the `#subpath`
-fragment from the most recent agent plugin version's member list:
+fragment from the most recently created agent plugin version's member list:
 
 1. **Matching subpath:** The discovered skill's plugin-relative
    directory matches a `#subpath` in the previous member list. Import
@@ -1480,9 +1648,7 @@ fragment from the most recent agent plugin version's member list:
    member reference in the previous agent plugin version, not by name
    lookup).
 2. **New subpath:** The directory does not match any previous member.
-   Import creates a new skill. The embedded skill's version number
-   matches the agent plugin version, consistent with the rule that
-   embedded skills use the agent plugin version.
+   Import creates a new skill with its own next server-assigned integer version.
 3. **Removed subpath:** A previous member's subpath is not found in the
    new source. The member is omitted from the new agent plugin version.
    The skill and its existing versions remain in the registry.
@@ -1491,23 +1657,21 @@ After processing all discovered skills, import creates a new
 `AgentPluginVersion` with updated member references. Previous agent
 plugin versions are immutable and unchanged.
 
-Since versions are server-assigned, import does not conflict with
-existing version numbers.
+Agent plugin and embedded skill version sequences are independent: a plugin
+version such as `"1.2.0"` may reference skill version `7`.
 
 ### Warnings and result
 
-Subagents, hooks, MCP configurations, and unrecognized content remain
-in the plugin artifact but are not registered. Each discovered skipped
-category produces a `PluginImportWarning` containing its category,
-path, and an explanation that this RFC does not create registry entries
-for non-skill content (though the content remains in the agent plugin). The CLI
-prints these warnings after registration. The SDK returns them together
-with the created agent plugin and skill versions in `PluginImportResult`.
+Root `mcp.json` and other non-skill content remain in the package but are not
+registered. Recognized standard content is returned separately from warnings;
+adapter-specific or unknown skipped categories produce a `PluginImportWarning`
+containing category, path, and explanation. The CLI prints the detected format,
+canonical identity, recognized unregistered content, and warnings. The SDK
+returns them with the created versions in `PluginImportResult`.
 
-Import translates an existing plugin into MLflow's registry
-representation, creating registry entries for discovered skills while
-preserving the complete plugin source. It does not install the plugin,
-translate an MLflow agent plugin into a downstream agent plugin format.
+Import normalizes supported inputs into the canonical Agent Plugins registry
+representation while preserving the complete package source. It does not
+install or export an MLflow agent plugin.
 
 ## Pull semantics details
 
@@ -1555,9 +1719,9 @@ mlflow.genai.register_skill(
     subpath="skills/test-coverage",
 )
 
-# Assembled agent plugin: each member has its own source
-plugin = mlflow.genai.create_agent_plugin(name="pr-workflow")
-plugin_version = mlflow.genai.create_agent_plugin_version(
+# Assembled agent plugin: each member has its own source. With no explicit
+# plugin_json, registration synthesizes a minimal manifest and version 0.1.0.
+plugin_version = mlflow.genai.register_agent_plugin(
     name="pr-workflow",
     skills=[
         "skills:/code-review/1",
@@ -1566,15 +1730,15 @@ plugin_version = mlflow.genai.create_agent_plugin_version(
 )
 ```
 
-Monolithic agent plugins are created through `import_plugin()`, which
-handles embedded skill creation internally. See the
+Monolithic agent plugins are typically created through `import_plugin()`, which
+handles package inspection and embedded skill creation internally. See the
 [Plugin import](#plugin-import) section for details.
 
 ### Discover and consume skills
 
 ```python
-# Find a skill by name
-skills = mlflow.genai.search_skills(filter_string="name = 'code-review'")
+# Free-text discovery across skill names and descriptions
+skills = mlflow.genai.search_skills(search_text="code review")
 skill = skills[0]
 
 # Search for active versions of that skill
@@ -1586,6 +1750,7 @@ versions = mlflow.genai.search_skill_versions(
 
 # Search for active agent plugins
 plugins = mlflow.genai.search_agent_plugins(
+    search_text="pull request review",
     filter_string="status = 'active'",
 )
 
@@ -1613,7 +1778,7 @@ plugin = mlflow.genai.search_agent_plugins(
 plugin_version = mlflow.genai.get_agent_plugin_version(
     name=plugin.name,
     organization=plugin.organization,
-    version=1,
+    version="0.1.0",
 )
 # plugin_version.skills == ["skills:/code-review/1", ...]
 

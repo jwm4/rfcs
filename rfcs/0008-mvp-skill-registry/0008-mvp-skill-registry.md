@@ -7,7 +7,7 @@
 
 | Author(s)              | [Bill Murdock](https://github.com/jwm4) (Red Hat) |
 | :--------------------- | :-- |
-| **Date Last Modified** | 2026-07-16 |
+| **Date Last Modified** | 2026-08-11 |
 | **AI Assistant(s)**    | Claude Code, Codex |
 
 **Table of contents**
@@ -56,8 +56,10 @@ The two entity types are:
   supporting files (scripts, templates, reference material). See the
   [Agent Skills specification](https://agentskills.io/) for the
   complete format definition.
-- **Agent plugins**: versioned collections that group related skills
-  into a single governed distribution unit
+- **Agent plugins**: governed versions of the open
+  [Agent Plugins](https://agent-plugins.org/) package format. Each version
+  preserves the complete canonical `plugin.json` manifest and may reference
+  registered skills for composition and governance.
 
 **Minimize required inputs.** The CLI and API infer optional fields
 from source content when possible, so the simplest invocation requires
@@ -68,14 +70,26 @@ and portable across languages.
 
 `mlflow skills pull` provides a harness-agnostic way to fetch
 registered content from its source.
-Existing Claude Code plugins can be imported as monolithic agent plugins:
-MLflow registers their discovered skills, preserves the plugin source,
-and warns about non-skill content that is pulled alongside
-the skills but does not receive individual registry entries.
 
+The Agent Plugins format is the canonical package representation for
+`AgentPluginVersion`. MLflow stores the complete
+immutable `plugin.json`, extracts its name and version for registry identity,
+and keeps lifecycle, aliases, tags, permissions, source information, and skill
+member references outside the canonical payload. This follows the hybrid
+storage pattern established by RFC-0004 for MCP `server_json`.
+
+Existing Claude Code plugins remain importable through an adapter that
+translates their metadata into canonical Agent Plugins manifests. Standard
+Agent Plugins packages are validated and imported directly. Root `mcp.json`
+content is recognized and preserved in monolithic packages but does not receive
+individual registry entries in this RFC. Agent plugin versions with no skill
+members, including MCP-only packages, are valid.
+
+Follow-up work currently tracked as
 [RFC-0009: Extended Skill Bundles](https://github.com/mlflow/rfcs/pull/27)
-will add registry entries for non-agent plugin members (e.g., subagents,
-MCP server references).
+will add registry entries for non-skill components such as subagents and MCP
+server references. Its existing draft will need to be revised around the
+canonical Agent Plugins model.
 
 # Basic example
 
@@ -98,12 +112,17 @@ mlflow.genai.register_skill(
 )
 ```
 
-## Create an agent plugin
+## Register an assembled agent plugin
 
 ```python
-plugin = mlflow.genai.create_agent_plugin(name="pr-workflow")
-mlflow.genai.create_agent_plugin_version(
-    name="pr-workflow",
+mlflow.genai.register_agent_plugin(
+    plugin_json={
+        "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+        "name": "pr-workflow",
+        "version": "1.0.0",
+        "description": "Skills for pull request review",
+        "keywords": ["code-review", "pull-requests"],
+    },
     skills=[
         "skills:/code-review/1",
         "skills:/style-check/1",
@@ -116,14 +135,15 @@ mlflow.genai.create_agent_plugin_version(
 ```bash
 mlflow agent-plugins import \
     --source https://github.com/acme/plugins.git@v1.0.0 \
-    --subpath pr-workflow \
-    --skill-uri skills:/pr-workflow
+    --subpath pr-workflow
 ```
 
-MLflow discovers skill directories (subdirectories containing a
-SKILL.md entry point) and registers them as members of a monolithic
-agent plugin. It preserves the Git source on the agent plugin and warns about
-non-skill content that is not registered as individual entities.
+MLflow auto-detects a standard Agent Plugins package before falling back to the
+Claude Code and generic skill-directory adapters. It validates or constructs a
+canonical `plugin.json`, discovers skills using the selected format's rules,
+and registers them as members of a monolithic agent plugin. It preserves the
+Git source and reports recognized package content, such as `mcp.json`, that is
+preserved but not individually registered.
 
 ## Motivation
 
@@ -193,30 +213,32 @@ infrastructure; registry-specific trace linkage (SKILL spans,
    **UI path:** Navigate to the Skills page, click "Register Skill,"
    fill in the source URL (name and source type are
    inferred when omitted), then submit.
-2. Create an agent plugin version that pins these members:
+2. Register an assembled agent plugin version that pins these members:
    ```bash
-   mlflow agent-plugins create-version --skill-uri skills:/pr-workflow \
+   mlflow agent-plugins register --plugin-uri agent-plugins:/_/pr-workflow \
        --skill skills:/code-review/1 \
        --skill skills:/style-check/1
    ```
+   Because no manifest is supplied, MLflow constructs a minimal valid
+   `plugin.json` and assigns version `0.1.0`.
    **UI path:** Navigate to the Agent Plugins tab, click "Create Agent Plugin,"
    add members by searching and selecting from registered skills.
 3. The agent plugin version is `active` by default. If needed,
    transition to `draft` for further review before making it
    available:
    ```bash
-   mlflow agent-plugins update-version --skill-uri skills:/pr-workflow/1 \
+   mlflow agent-plugins update-version --plugin-uri agent-plugins:/_/pr-workflow/0.1.0 \
        --status draft
    ```
    **UI path:** Open the agent plugin version detail page, use the status
    dropdown to change from "active" to "draft."
 4. Set an alias for stable downstream resolution:
    ```bash
-   mlflow agent-plugins set-alias --skill-uri skills:/pr-workflow \
-       --alias production --version 1
+   mlflow agent-plugins set-alias --plugin-uri agent-plugins:/_/pr-workflow \
+       --alias production --version 0.1.0
    ```
    **UI path:** In the agent plugin detail page, click "Add Alias" and map
-   `production` to version `1`.
+   `production` to version `0.1.0`.
 
 #### Import an existing plugin as an agent plugin
 
@@ -224,22 +246,25 @@ infrastructure; registry-specific trace linkage (SKILL spans,
    ```bash
    mlflow agent-plugins import \
        --source https://github.com/acme/plugins.git@v1.0.0 \
-       --subpath pr-workflow \
-       --skill-uri skills:/pr-workflow
+       --subpath pr-workflow
    ```
 2. MLflow fetches the source to a temporary directory in the client
-   environment, discovers skill directories (subdirectories containing
-   a SKILL.md entry point), and cleans up the temporary copy after
-   registration completes.
-3. MLflow registers each discovered skill as an embedded, source-less
+   environment and auto-detects the input format. A recognized root
+   `plugin.json` selects Agent Plugins v1; otherwise MLflow checks for a Claude
+   Code manifest and then the generic skill-directory layout.
+3. MLflow validates and preserves a standard manifest, or constructs one from
+   the selected adapter. A supplied manifest version is used as the registry
+   version. When the optional field is absent, MLflow generates a valid SemVer
+   version and inserts it into the stored canonical payload.
+4. MLflow registers each discovered skill as an embedded, source-less
    skill version and records its path as the `#subpath` fragment
-   in the member URI of a new monolithic agent plugin version. The agent plugin retains the original plugin
-   source pointer.
-4. If the plugin also contains subagents, hooks, or MCP configuration,
-   MLflow prints a warning that non-skill content does not receive
-   individual registry entries. The content remains in the agent plugin and
-   is included when the agent plugin is pulled.
-5. The created agent plugin and skills are available through the same
+   in the member URI of a new monolithic agent plugin version. The agent plugin
+   retains the original source pointer.
+5. Root `mcp.json` is reported as recognized standard content that is preserved
+   but not individually registered. Other non-skill content is also retained in
+   the package and reported by introspection. A valid package with no skills is
+   still registered with zero skill member references.
+6. The created agent plugin and skills are available through the same
    discovery, lifecycle, and pull flows as manually registered
    entries.
 
@@ -250,10 +275,11 @@ infrastructure; registry-specific trace linkage (SKILL spans,
    ```bash
    mlflow agent-plugins import \
        --source https://github.com/acme/plugins.git@v2.0.0 \
-       --subpath pr-workflow \
-       --skill-uri skills:/pr-workflow
+       --subpath pr-workflow
    ```
-2. MLflow looks up the latest version of the `pr-workflow` agent
+2. MLflow uses or generates the incoming manifest version and rejects the
+   import if that immutable agent plugin version already exists. It looks up
+   the most recently created prior version of the `pr-workflow` agent
    plugin and compares discovered skill directories against the
    `#subpath` fragments in its member list.
 3. Skills whose subpaths match existing members get new versions of
@@ -278,22 +304,24 @@ infrastructure; registry-specific trace linkage (SKILL spans,
    The skill detail includes agent plugin memberships.
 3. Create a new version of the agent plugin with the updated member:
    ```bash
-   mlflow agent-plugins create-version --skill-uri skills:/pr-workflow \
+   mlflow agent-plugins create-version --plugin-uri agent-plugins:/_/pr-workflow \
+       --plugin-json ./plugin-1.1.0.json \
        --skill skills:/code-review/2 \
        --skill skills:/style-check/1
    ```
 4. The previous agent plugin version is unchanged. Agents using
-   aliases like `skills:/pr-workflow@production` continue to resolve
+   aliases like `agent-plugins:/_/pr-workflow@production` continue to resolve
    to the old version until the alias is updated.
 
 #### Discover a skill for a specific purpose
 
 1. Search the registry by keyword:
    ```bash
-   mlflow skills search --filter "name LIKE '%review%'" --status active
+   mlflow skills search --search-text review --filter "status = 'active'"
    ```
    **UI path:** Navigate to the Skills page, type "review" in the
-   search bar, and filter by status "active" using the dropdown.
+   search bar to match names and descriptions, and filter by status "active"
+   using the dropdown.
 2. Browse the returned list of matching skills with names,
    descriptions, and latest versions.
    **UI path:** Scan the card-based list view. Each card shows the
@@ -328,28 +356,29 @@ can autonomously explore execution traces via MCP tools.
    mlflow skills register --skill-uri skills:/code-review \
        --source https://github.com/acme/agent-skills.git@v2.0.0 \
        --subpath code-review
-   mlflow agent-plugins create-version --skill-uri skills:/pr-workflow \
+   mlflow agent-plugins create-version --plugin-uri agent-plugins:/_/pr-workflow \
+       --plugin-json ./plugin-1.1.0.json \
        --skill skills:/code-review/2 \
        --skill skills:/style-check/1 \
        --status draft
    ```
-2. Pull version 1, install it into the harness manually, and run it
+2. Pull version `1.0.0`, install it into the harness manually, and run it
    on a set of test inputs. Traces are recorded in MLflow under
    experiment A.
-3. Pull version 2, install it into the harness manually, and run it
+3. Pull version `1.1.0`, install it into the harness manually, and run it
    on the same test inputs. Traces are recorded under experiment B.
 4. Use `mlflow.genai.evaluate()` with a `make_judge` scorer that
    uses the `{{ trace }}` template variable to score both sets of
    traces against quality criteria (correctness, helpfulness, safety).
 5. Compare the evaluation results side by side in the MLflow UI to
-   determine whether version 2 is an improvement.
-6. If version 2 is better, transition it to active and update the
+   determine whether version `1.1.0` is an improvement.
+6. If version `1.1.0` is better, transition it to active and update the
    production alias:
    ```bash
-   mlflow agent-plugins update-version --skill-uri skills:/pr-workflow/2 \
+   mlflow agent-plugins update-version --plugin-uri agent-plugins:/_/pr-workflow/1.1.0 \
        --status active
-   mlflow agent-plugins set-alias --skill-uri skills:/pr-workflow \
-       --alias production --version 2
+   mlflow agent-plugins set-alias --plugin-uri agent-plugins:/_/pr-workflow \
+       --alias production --version 1.1.0
    ```
 
 #### Compare agent performance with and without a skill
@@ -394,7 +423,8 @@ both against the same inputs and scorers.
    mlflow skills register --skill-uri skills:/code-review \
        --source https://github.com/acme/agent-skills.git@v1.1.0 \
        --subpath code-review
-   mlflow agent-plugins create-version --skill-uri skills:/pr-workflow \
+   mlflow agent-plugins create-version --plugin-uri agent-plugins:/_/pr-workflow \
+       --plugin-json ./plugin-1.1.0.json \
        --skill skills:/code-review/2 \
        --skill skills:/style-check/1 \
        --status draft
@@ -421,11 +451,13 @@ discovery/search operations.
 ### Out of scope
 
 - **Registry entries for non-skill content.** Agent plugins can contain
-  non-skill content (e.g., subagents, MCP configurations) that is
-  pulled alongside skills, but this RFC does not create
-  individual registry entries for non-skill members.
+  non-skill content. Standard `mcp.json` and adapter-specific content are
+  recognized and preserved in monolithic packages, but this RFC does not create
+  individual registry entries or membership rows for non-skill components.
+  Follow-up work currently tracked as
   [RFC-0009: Extended Skill Bundles](https://github.com/mlflow/rfcs/pull/27)
-  will add those entries. The registry backend is designed to be
+  will add those entries after its existing draft is revised around the
+  canonical Agent Plugins model. The registry backend is designed to be
   extensible to these types.
 - **Artifact storage as the only path.** The registry supports both
   external source pointers (Git, OCI, ZIP) and direct artifact storage
@@ -433,10 +465,10 @@ discovery/search operations.
   the metadata-first, source-pointer model remains the primary design.
 - **Authoring or development tools.** The registry manages published
   skills, not the process of writing them.
-- **Format specification.** The registry is format-agnostic. It does
-  not define what a skill must contain or how it must be structured.
-  The SKILL.md convention is an ecosystem convention, not a registry
-  requirement.
+- **A new package specification.** Skills follow the Agent Skills specification,
+  and agent plugins use the open Agent Plugins v1 format as their canonical
+  representation. MLflow adds governance and composition metadata outside
+  those payloads rather than defining another package format.
 - **Agent routing or orchestration.** The registry is a metadata and
   governance layer. It does not decide which skills to invoke at
   runtime or how agents compose capabilities.
@@ -468,6 +500,7 @@ AgentPluginVersion ||--o{ AgentPluginVersionMember : "has members"
 AgentPluginVersionMember }o--|| SkillVersion : "skill member"
 
 AgentPluginVersionMember {
+  string plugin_version
   string member_organization
   string member_name
   int member_version
@@ -496,11 +529,11 @@ organization), `description`,
 **UI fallback behavior**: for version-level fields shown on parent
 cards (e.g., `source_type`),
 the UI derives values from the latest-resolved
-version. Latest resolution prefers the highest version number among
-`active` versions; otherwise it falls back to the highest version
-number among non-`deleted` non-`active` versions. This fallback is
-a UI concern only and is not applied in the API or store layer. The
-same rules apply to `AgentPlugin`.
+version. For Skills, latest resolution prefers the highest version number among
+`active` versions; otherwise it falls back to the highest version number among
+non-`deleted` non-`active` versions. Agent Plugins use the string-version
+resolution rule below. This fallback is a UI concern only and is not applied in
+the API or store layer.
 
 #### SkillVersion
 
@@ -522,27 +555,52 @@ This matches the MCP Server Registry behavior
 
 #### AgentPlugin
 
-An agent plugin groups related skills into a governed unit that maps
-to the "plugin" concept in agent harnesses: a curated set of
-capabilities that work together. Agent plugins are a first-class entity
-rather than a tag-based grouping because they provide versioned
-membership snapshots (reproducible point-in-time combinations),
-agent plugin-level source pointers (a single OCI image or Git repo),
-independent lifecycle (deprecate an agent plugin without deprecating its
-members), and direct mapping to the harness plugin concept. Agent
-plugins use the same `(workspace, organization, name)` composite
-identity as skills.
-Follows the same top-level pattern as Skill: versions, tags, aliases,
-and derived status.
+An agent plugin is the governed registry identity for an open Agent Plugins
+package. It provides versioned package snapshots, optional registered-skill
+membership, source pointers, and an independent lifecycle. The stable identity
+is `(workspace, organization, name)`, where `name` is extracted from
+`plugin_json["name"]` and follows the Agent Plugins naming constraints.
+`organization` remains an MLflow registry namespace and is not written into the
+canonical manifest.
 
+The parent retains mutable MLflow-managed presentation metadata. Each version
+separately preserves publisher metadata in its immutable `plugin_json`. When
+parent presentation fields are unset, the UI may fall back to the latest
+resolved manifest metadata; the API returns parent fields as stored.
+
+Agent plugins use a dedicated URI namespace. A parent is addressed as
+`agent-plugins:/<organization-or-_>/<name>`, an exact version appends
+`/<version>`, and an alias appends `@<alias>` to the parent URI. The `_`
+segment represents an empty organization. Unlike skill URIs, this fixed
+identity shape remains unambiguous when versions are arbitrary strings.
+
+Follow-up work currently tracked as
 [RFC-0009: Extended Skill Bundles](https://github.com/mlflow/rfcs/pull/27)
-will add registry entries for non-agent plugin members (e.g., subagents,
-MCP server references), enabling full multi-component agent plugins.
+will add registry entries for non-skill components, enabling full
+multi-component agent plugins after its existing draft is revised around this
+canonical model.
 
 #### AgentPluginVersion
 
-A versioned snapshot of an agent plugin's membership. Members are referenced
-by URI string following the `models:/name/version` convention:
+A versioned snapshot containing an immutable canonical `plugin_json`, typed
+source metadata, lifecycle state, and optional registered-skill membership.
+The full manifest is stored in a JSON column following RFC-0004's hybrid
+`server_json` precedent. MLflow-managed fields remain outside the payload.
+
+The registry version is a string equal to `plugin_json["version"]`. A supplied
+version is preserved. When the optional manifest field is absent, MLflow assigns
+a unique valid SemVer value, using `0.1.0` for a new plugin and an
+implementation-defined SemVer heuristic for later versions, then inserts it
+into the stored payload.
+
+An assembled plugin may omit `plugin_json` entirely. In that case, the
+server-side registry layer synthesizes a minimal valid manifest from the parent
+name and generated version before persistence. Monolithic import always submits
+a complete manifest produced by validation or format translation. Every stored
+agent plugin version therefore has a complete `plugin_json`.
+
+Skill members are referenced by URI string following the
+`models:/name/version` convention:
 `skills:/name` (name only), `skills:/name/version` (pinned version),
 `skills:/name@alias` (alias resolution), or
 `skills:/name/version#subpath` (embedded skills in monolithic agent plugins).
@@ -552,7 +610,7 @@ An agent plugin version is one of two kinds:
   Each skill version has its own source. `pull` fetches members
   individually.
 - **Monolithic:** has its own source pointer (e.g., a single OCI
-  image or Git repo containing multiple skills) and member
+  image or Git repo containing a complete Agent Plugins package) and member
   references. Skill member versions may omit their own sources when
   their content lives inside the agent plugin. A source-less member
   must include a `#subpath` fragment in its member URI to identify
@@ -562,13 +620,18 @@ An agent plugin version is one of two kinds:
 An agent plugin version cannot have both an agent plugin-level source
 and skill member versions with their own sources. This avoids
 confusion about which source is authoritative for skill content.
+Both kinds have canonical `plugin_json` and may have zero skill members.
+Standard `mcp.json` content in a monolithic source is preserved but does not
+create membership rows in this RFC.
 
 #### Aliases and tags
 
 All entity types use the same alias pattern: a frozen `(name, alias,
 version)` tuple mapping a stable name (e.g., `production`) to a
-specific version number. Tags are `(key, value)` pairs at both the
-entity level and version level.
+specific version. Skill aliases target integer versions; agent plugin aliases
+target manifest version strings. Tags are `(key, value)` pairs at both the
+entity level and version level. Manifest `keywords` are immutable publisher
+metadata and are not copied into mutable MLflow tags.
 
 Dataclass definitions, field tables, source type details, and
 database schema for all entity types are in
@@ -635,16 +698,14 @@ rather than top-level hard delete.
 
 #### Entity-level status
 
-`Skill.status` and `AgentPlugin.status` are read-only. They are
-derived from the parent-resolved version: the highest version number
-among `active` versions if one exists, otherwise the highest version
-number among non-`deleted` non-`active` versions. Deleted versions
-never drive parent status. This follows the MCP Server Registry
-pattern (RFC-0004).
+`Skill.status` and `AgentPlugin.status` are read-only. They are derived from the
+same latest-resolved version used for each entity's `latest_version`. Resolution
+prefers eligible `active` versions and otherwise falls back to non-`deleted`
+non-`active` versions. Deleted versions never drive parent status.
 
 #### `latest_version` resolution
 
-Version numbers are server-assigned monotonic integers. Each new
+Skill version numbers are server-assigned monotonic integers. Each new
 version for a given skill receives the next integer.
 `get_latest_skill_version(name, organization)` returns the highest
 version number among `active` versions if one exists, otherwise the
@@ -661,24 +722,30 @@ rejected, while
 is treated as a convenience alias for
 `get_latest_skill_version(name, organization)`.
 
-The same rule applies to agent plugins:
+Agent plugin versions instead use the immutable string extracted from or added
+to `plugin_json["version"]`. Among eligible `active` versions, semantic
+precedence selects `latest` when every candidate is valid SemVer. If any
+candidate cannot be semantically ordered, creation time selects the most
+recent. Creation time also breaks equal SemVer precedence, such as versions
+that differ only in build metadata. When there is no active version, the same
+rule applies to non-`deleted` non-`active` candidates.
+
+The reserved alias behavior also applies to agent plugins:
 `set_agent_plugin_alias(name, alias="latest", organization, ...)`
 is rejected, while
 `get_agent_plugin_version_by_alias(name, alias="latest", organization)`
 delegates to
 `get_latest_agent_plugin_version(name, organization)`.
 
-This aligns with the MCP Server Registry (RFC-0004).
+This aligns with the MCP Server Registry's use of publisher-supplied canonical
+versions while accommodating the Agent Plugins specification's optional,
+not-necessarily-SemVer `version` field.
 
-> **Versioning divergence from RFC-0004.** The MCP Server Registry
-> uses publisher-supplied semantic versioning. This RFC intentionally
-> uses server-assigned monotonic integers instead, because skill
-> versioning is primarily a registry concern (tracking which snapshot
-> is deployed) rather than a release-engineering concern (communicating
-> API compatibility). If future requirements surface a need to
-> converge, both RFCs can be aligned in a follow-up without changing
-> the data model, since version is an opaque identifier from the
-> caller's perspective.
+> **Skill versioning divergence from RFC-0004.** Skills continue to use
+> server-assigned monotonic integers because the Agent Skills format does not
+> declare package versions. Agent plugins use their canonical manifest version
+> strings. Consequently, an imported agent plugin version such as `"1.2.0"` may
+> reference an independently assigned embedded skill version such as `7`.
 
 > **Default status divergence from RFC-0004.** The MCP Server
 > Registry defaults new versions to `draft`. This RFC defaults to
@@ -690,44 +757,62 @@ This aligns with the MCP Server Registry (RFC-0004).
 ### Plugin import
 
 `mlflow agent-plugins import` is a client-side convenience operation for
-registering an existing plugin as a monolithic agent plugin. Import expects
-a standard layout: a directory tree where each skill is a
-subdirectory containing a SKILL.md entry point. This layout is used
-by Claude Code and other harnesses. Additional discovery rules for
-other layouts can be added later without changing the registry data
-model.
+registering an existing package as a monolithic agent plugin. Import fetches the
+source, applies the requested subpath, and auto-detects formats in this order:
+
+1. A root `plugin.json` declaring a recognized Agent Plugins schema.
+2. A `.claude-plugin/plugin.json` Claude Code manifest.
+3. The generic skill-directory layout previously supported by this RFC.
+
+The standard root manifest takes precedence when more than one marker exists.
+A manifest that declares a recognized Agent Plugins schema but fails validation
+causes import to fail rather than silently falling back to a looser adapter.
+A manifest that declares an unsupported Agent Plugins schema version also
+fails rather than falling back.
 
 Before importing, users can call `mlflow agent-plugins introspect` or the SDK
-`introspect_plugin()` function to preview the skills and unregistered
-non-skill content that MLflow discovers. Introspection is read-only,
+`introspect_plugin()` function to preview the detected format, canonical
+manifest, skills, recognized unregistered content, and warnings. Introspection is read-only,
 accepts either a local path or a remotely accessible source, and does not
 create registry records. Import still requires a remote source so the
 registered agent plugin retains a pullable source pointer.
 
-The client fetches the plugin from a Git, OCI, ZIP, or MLflow artifact
-source and inspects it locally. It discovers directories containing a
-SKILL.md entry point, creates embedded skill versions without individual
-source pointers, and records each directory as the `#subpath`
-fragment in the member URI. It then creates a monolithic agent plugin
-version whose
-source fields preserve the original plugin location.
+For Agent Plugins v1, MLflow applies the standard manifest validation rules and
+discovers immediate child directories matching `skills/*/SKILL.md`. Fatal
+manifest violations reject import. Unknown top-level fields and a non-object
+`extensions` field produce nonfatal warnings and are preserved but ignored
+semantically, as required by the standard. Initially, only the v1.0.0 schema
+identifier is recognized.
+
+For Claude Code and generic inputs, an adapter constructs a minimal canonical
+Agent Plugins manifest while preserving available metadata. If the canonical
+manifest supplies `version`, MLflow uses it. Otherwise MLflow assigns a unique
+valid SemVer value, using `0.1.0` for a new plugin and an
+implementation-defined heuristic for later imports, and inserts that value into
+the stored payload.
+
+The client creates embedded skill versions without individual source pointers
+and records each directory as the `#subpath` fragment in the member URI. It then
+creates a monolithic agent plugin version whose source fields preserve the
+original package location. The complete `plugin_json` is immutable after
+creation; importing an existing `(workspace, organization, name, version)`
+fails rather than overwriting it.
 
 Non-skill content remains in the source artifact but is not registered
-as entities or members. The import result reports any unrecognized
-content types so that the user is aware of what was not registered.
+as entities or members. Root `mcp.json` is reported as recognized standard
+content that is preserved but not individually registered. Other content is
+reported so that the user understands the complete package. A valid Agent
+Plugins package with no skills is registered with zero skill members.
 Import does not install the plugin or translate an MLflow agent plugin
 into another agent plugin format.
-
-The agent plugin version number is server-assigned. Embedded skills use the
-agent plugin version.
 
 When importing a source into an agent plugin that already has previous
 versions, import matches discovered skills to existing members by
 comparing each skill's plugin-relative directory path against the
-`#subpath` fragments in the most recent agent plugin version's member
+`#subpath` fragments in the most recently created agent plugin version's member
 list. A matching subpath creates a new version of the existing skill.
 A new subpath (not in the previous version) creates a new skill
-whose version number matches the agent plugin version. A previous
+with its own next server-assigned integer version. A previous
 member whose subpath no longer appears in the source is omitted from
 the new agent plugin version but remains in the registry.
 This allows re-importing an updated plugin without requiring name-based
@@ -805,8 +890,16 @@ Registry (RFC-0004).
 The Skills page lives under the GenAI workflow in the MLflow sidebar,
 alongside Experiments, Prompts, MCP Servers, and AI Gateway. It
 provides list and detail views for skills and agent plugins. The list view
-supports filtering by status and search by name. Detail views show
+supports structured filtering by status, organization, tags, source type, and
+membership where applicable. A separate free-text search input covers
+user-visible discovery metadata: Skill name and description; and Agent Plugin
+name, parent description, resolved manifest description, manifest keywords,
+manifest author name, and organization. Manifest keywords remain distinct from
+mutable MLflow tags. Detail views show
 metadata, version history, aliases, tags, and agent plugin memberships.
+Because manifest search metadata comes from the latest-resolved version,
+lifecycle changes that alter which version resolves as latest may also change
+the parent agent plugin's free-text search matches.
 Specific layouts and card designs will be determined through UI mocks.
 
 ### Implementation details
@@ -857,7 +950,8 @@ The two approaches are complementary.
 
 New feature, not a breaking change. This RFC delivers Skill and
 AgentPlugin entities, store, REST API, SDK, CLI, UI,
-`mlflow skills pull`, and plugin import.
+`mlflow skills pull`, canonical Agent Plugins manifests, and standard, Claude
+Code, and generic plugin import adapters.
 
 #### Future improvements
 
@@ -870,7 +964,7 @@ AgentPlugin entities, store, REST API, SDK, CLI, UI,
   installation commands, the package manager plugin interface, the
   `mlflow-skills.lock` resolution lock, and `install_count` will be
   covered in a separate RFC.
-- **Registry entries for non-agent plugin members.** Individual registry
+- **Registry entries for non-skill components.** Individual registry
   entries for non-skill content (e.g., subagents, MCP server references)
   are deferred to
   [RFC-0009: Extended Skill Bundles](https://github.com/mlflow/rfcs/pull/27).
