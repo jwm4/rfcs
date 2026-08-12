@@ -486,15 +486,16 @@ after creation.
 
 **Version validation.** When `plugin_json["version"]` is present, MLflow
 validates it as SemVer. Semverish inputs (e.g., `1.0`) are normalized to full
-SemVer (e.g., `1.0.0`). Non-SemVer version strings are rejected. When absent
-for a new plugin, MLflow inserts `0.1.0`. When absent for an existing plugin,
-MLflow inserts a unique valid SemVer chosen by a simple implementation-defined
-heuristic. In every stored entity, `version == plugin_json["version"]`.
+SemVer (e.g., `1.0.0`). Non-SemVer version strings are rejected. When the
+manifest does not include a version, the user must supply one explicitly.
+MLflow inserts the supplied version into the stored payload. In every stored
+entity, `version == plugin_json["version"]`.
 
 **Manifest synthesis.** For an assembled plugin, both registration and
-low-level version creation may receive `plugin_json=None`. The server-side
-registry layer synthesizes a minimal valid manifest using the parent name and
-generated version before storing the entity. Monolithic import always supplies
+low-level version creation may receive `plugin_json=None`. The user must
+supply a `version` in this case. The server-side registry layer synthesizes
+a minimal valid manifest using the parent name and supplied version before
+storing the entity. Monolithic import always supplies
 a complete manifest after validation or adapter translation. Persistence never
 stores a null or incomplete canonical payload.
 
@@ -791,6 +792,7 @@ class SkillRegistryMixin:
         self,
         name: str,
         organization: str = "",
+        version: str | None = None,
         plugin_json: dict[str, Any] | None = None,
         skills: list[str] | None = None,
         source_type: str | None = None,
@@ -1021,24 +1023,29 @@ def create_agent_plugin_version(
     *,
     name: str,
     organization: str = "",
+    version: str | None = None,
     plugin_json: dict[str, Any] | None = None,
     skills: list[str] | None = None,
     source: GitSource | OCISource | ZipSource | str | None = None,
     status: str = "active",
-) -> AgentPluginVersion: ...
+) -> AgentPluginVersion:
+    """version is required when plugin_json is None or when
+    plugin_json does not contain a version field."""
 
 
 def register_agent_plugin(
     *,
     plugin_json: dict[str, Any] | None = None,
     name: str | None = None,
+    version: str | None = None,
     organization: str = "",
     skills: list[str] | None = None,
     source: GitSource | OCISource | ZipSource | str | None = None,
     status: str = "active",
 ) -> AgentPluginVersion:
     """Validate or synthesize a canonical manifest, create or reuse the
-    parent AgentPlugin, and register one immutable version."""
+    parent AgentPlugin, and register one immutable version. version is
+    required when plugin_json is None or does not contain a version."""
 
 
 def get_agent_plugin(*, name: str, organization: str = "") -> AgentPlugin: ...
@@ -1169,6 +1176,7 @@ def import_plugin(
     *,
     source: GitSource | OCISource | ZipSource | str,
     plugin_name: str | None = None,
+    version: str | None = None,
     organization: str = "",
 ) -> PluginImportResult:
     """Import a plugin as a monolithic agent plugin.
@@ -1177,9 +1185,10 @@ def import_plugin(
     validates or constructs canonical plugin_json; discovers and registers
     skills; and preserves the package source. Recognized mcp.json content is
     reported but not registered. plugin_name is used only when the selected
-    adapter cannot derive a name. A typed source class (GitSource, OCISource,
-    ZipSource) is converted to flat REST fields; a plain string is also
-    accepted for convenience.
+    adapter cannot derive a name. version is required when the detected
+    manifest does not contain a version field. A typed source class
+    (GitSource, OCISource, ZipSource) is converted to flat REST fields; a
+    plain string is also accepted for convenience.
     """
 
 
@@ -1243,9 +1252,11 @@ reimplementing inference in every language, and prepares for future
 server-side content inspection (e.g., signature verification).
 
 For agent plugins, `POST /register` and version creation validate the submitted
-canonical `plugin_json`. The server extracts and checks `name`, validates the
-supplied version as SemVer (normalizing semverish values), or assigns and
-inserts a valid SemVer string when the version is absent. The server does not fetch remote package content. Client-side
+canonical `plugin_json`. The server extracts and checks `name` and validates
+the version as SemVer (normalizing semverish values). When `plugin_json` is
+absent or does not contain a version, the request must include a `version`
+field. When both `plugin_json["version"]` and the request-level `version` are
+present, they must agree; a mismatch is rejected. The server does not fetch remote package content. Client-side
 `import_plugin()` performs source fetching, format detection, filesystem
 validation, and adapter translation before submitting the canonical payload and
 member references.
@@ -1405,6 +1416,7 @@ class PluginJSONPayload(BaseModel):
 
 
 class CreateAgentPluginVersionRequest(BaseModel):
+    version: str | None = None
     plugin_json: PluginJSONPayload | None = None
     skills: list[str] | None = None
     source: str | None = None
@@ -1533,9 +1545,9 @@ boundaries that cannot be expressed by a strict Pydantic model alone. Only the
 canonical v1.0.0 `$schema` identifier is initially recognized. Unknown
 top-level fields and a non-object `extensions` field are preserved and reported
 as nonfatal warnings but ignored semantically. Other schema violations are
-fatal. `plugin_json["name"]` must match an explicit path or request name. The
-optional version is generated and inserted before the immutable payload is
-stored.
+fatal. `plugin_json["name"]` must match an explicit path or request name. When the
+manifest does not include a version, the request must supply one. When both
+are present, they must agree.
 
 **Name and organization validation.** The server rejects `organization` and
 skill `name` values that would create ambiguity in URIs, REST paths, or artifact
@@ -1594,9 +1606,9 @@ same operations from the command line. Commands accept `--name` and optional
 | `mlflow agent-plugins import` | `import_plugin()` | Import a plugin as a monolithic agent plugin |
 
 `create-version` and `register` accept `--plugin-json PATH` for a full standard
-manifest. When omitted for an assembled plugin, the command synthesizes a
-minimal manifest from `--name` or `--plugin-uri` and assigns a version according
-to the generation rule. Search commands expose `--search-text` separately from
+manifest. When omitted for an assembled plugin, `--version` is required and
+the command synthesizes a minimal manifest from `--name` or `--plugin-uri`
+and the supplied version. Search commands expose `--search-text` separately from
 `--filter`.
 
 **Relationship to existing `mlflow skills` subcommands.** MLflow already
@@ -1644,8 +1656,8 @@ The importer:
 
 When multiple markers exist, the standard root manifest takes precedence. The
 canonical name follows the Agent Plugins naming constraints. A supplied
-manifest version is preserved; an omitted version is generated and inserted as
-specified above.
+manifest version is preserved; when the manifest does not include a version,
+the user must supply one via `--version` or the `version` parameter.
 
 ### Registration behavior
 
@@ -1752,9 +1764,10 @@ mlflow.genai.register_skill(
 )
 
 # Assembled agent plugin: each member has its own source. With no explicit
-# plugin_json, registration synthesizes a minimal manifest and version 0.1.0.
+# plugin_json, version is required and a minimal manifest is synthesized.
 plugin_version = mlflow.genai.register_agent_plugin(
     name="pr-workflow",
+    version="0.1.0",
     skills=[
         "skills:/code-review/1",
         "skills:/test-coverage/1",

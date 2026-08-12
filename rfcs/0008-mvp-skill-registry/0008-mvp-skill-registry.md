@@ -226,11 +226,12 @@ infrastructure; registry-specific trace linkage (SKILL spans,
 2. Register an assembled agent plugin version that pins these members:
    ```bash
    mlflow agent-plugins register --plugin-uri agent-plugins:/pr-workflow \
+       --version 0.1.0 \
        --skill skills:/code-review/1 \
        --skill skills:/style-check/1
    ```
    Because no manifest is supplied, MLflow constructs a minimal valid
-   `plugin.json` and assigns version `0.1.0`.
+   `plugin.json` using the supplied version.
    **UI path:** Navigate to the Agent Plugins tab, click "Create Agent Plugin,"
    add members by searching and selecting from registered skills.
 3. The agent plugin version is `active` by default. If needed,
@@ -264,8 +265,8 @@ infrastructure; registry-specific trace linkage (SKILL spans,
    Code manifest and then the generic skill-directory layout.
 3. MLflow validates and preserves a standard manifest, or constructs one from
    the selected adapter. A supplied manifest version is used as the registry
-   version. When the optional field is absent, MLflow generates a valid SemVer
-   version and inserts it into the stored canonical payload.
+   version. When the manifest does not include a version, the user must supply
+   one explicitly (e.g., `--version` on the CLI).
 4. MLflow registers each discovered skill as an embedded, source-less
    skill version and records its path as the `#subpath` fragment
    in the member URI of a new monolithic agent plugin version. The agent plugin
@@ -287,8 +288,9 @@ infrastructure; registry-specific trace linkage (SKILL spans,
        --source https://github.com/acme/plugins.git \
        --ref v2.0.0 --subpath pr-workflow
    ```
-2. MLflow uses or generates the incoming manifest version and rejects the
-   import if that immutable agent plugin version already exists. It looks up
+2. MLflow uses the incoming manifest version (or the user-supplied
+   `--version`) and rejects the import if that agent plugin version
+   already exists. It looks up
    the most recently created prior version of the `pr-workflow` agent
    plugin and compares discovered skill directories against the
    `#subpath` fragments in its member list.
@@ -599,14 +601,15 @@ The full manifest is stored in a JSON column following RFC-0004's hybrid
 
 The registry version is a string equal to `plugin_json["version"]`. A supplied
 version must be valid SemVer (or semverish, e.g., `1.0` is normalized to
-`1.0.0`). Non-SemVer version strings are rejected. When the optional manifest
-field is absent, MLflow assigns a unique valid SemVer value, using `0.1.0` for
-a new plugin and an implementation-defined SemVer heuristic for later versions,
-then inserts it into the stored payload.
+`1.0.0`). Non-SemVer version strings are rejected. When the manifest does not
+include a version, the user must supply one explicitly (e.g., via `--version`
+on the CLI or the `version` parameter in the SDK). MLflow inserts the supplied
+version into the stored payload.
 
-An assembled plugin may omit `plugin_json` entirely. In that case, the
-server-side registry layer synthesizes a minimal valid manifest from the parent
-name and generated version before persistence. Monolithic import always submits
+An assembled plugin may omit `plugin_json` entirely. In that case, the user
+must supply a `version` and the server-side registry layer synthesizes a
+minimal valid manifest from the parent name and supplied version before
+persistence. Monolithic import always submits
 a complete manifest produced by validation or format translation. Every stored
 agent plugin version therefore has a complete `plugin_json`.
 
@@ -799,9 +802,8 @@ For Claude Code and generic inputs, an adapter constructs a minimal canonical
 Agent Plugins manifest while preserving available metadata. If the canonical
 manifest supplies `version`, MLflow validates it as SemVer (normalizing
 semverish values like `1.0` to `1.0.0`) and rejects non-SemVer strings.
-Otherwise MLflow assigns a unique valid SemVer value, using `0.1.0` for a new
-plugin and an implementation-defined heuristic for later imports, and inserts
-that value into the stored payload.
+Otherwise the user must supply a version explicitly (e.g., `--version` on
+the CLI). MLflow inserts the supplied version into the stored payload.
 
 The client creates embedded skill versions without individual source pointers
 and records each directory as the `#subpath` fragment in the member URI. It then
