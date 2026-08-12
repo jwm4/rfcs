@@ -111,9 +111,9 @@ PrimaryKey: `(workspace, organization, name)`.
 | `organization` | `String(256)` | PK, FK to `agent_plugins` |
 | `name` | `String(256)` | PK, FK to `agent_plugins` |
 | `version` | `String(256)` | PK; equal to canonical `plugin_json["version"]` |
-| `version_major` | `Integer` | nullable; extracted for valid SemVer values |
-| `version_minor` | `Integer` | nullable; extracted for valid SemVer values |
-| `version_patch` | `Integer` | nullable; extracted for valid SemVer values |
+| `version_major` | `Integer` | extracted SemVer major component |
+| `version_minor` | `Integer` | extracted SemVer minor component |
+| `version_patch` | `Integer` | extracted SemVer patch component |
 | `plugin_json` | `JSON` | immutable canonical Agent Plugins manifest |
 | `search_text` | `Text` | derived discovery projection of manifest description, keywords, and author name |
 | `source_type` | `String(20)` | optional; `git`, `oci`, `zip`, `mlflow` |
@@ -129,13 +129,13 @@ PrimaryKey: `(workspace, organization, name)`.
 FK: `(workspace, organization, name)` references `agent_plugins`,
 CASCADE delete.
 
-**Version ordering.** Latest resolution first selects active candidates, or
-non-deleted non-active candidates when none are active. When every candidate is
-valid SemVer, semantic precedence determines the result. If any candidate is
-not valid SemVer, `creation_timestamp DESC` determines the result. The nullable
-numeric components narrow semantic candidates efficiently; full prerelease
-precedence is applied in application code. Creation time breaks equal semantic
-precedence, including versions that differ only in build metadata.
+**Version ordering.** All versions are valid SemVer (semverish inputs are
+normalized on creation). Latest resolution first selects active candidates, or
+non-deleted non-active candidates when none are active. Semantic precedence
+determines the result. The numeric components narrow candidates efficiently;
+full prerelease precedence is applied in application code. Creation time breaks
+equal semantic precedence, including versions that differ only in build
+metadata.
 
 **Index:** `ix_agent_plugin_versions_latest_lookup` on `(workspace,
 organization, name, status, version_major, version_minor, version_patch,
@@ -484,11 +484,12 @@ non-object `extensions` field generate nonfatal warnings, remain preserved in
 the stored payload, and receive no MLflow semantics. The payload is immutable
 after creation.
 
-**Optional manifest version.** When `plugin_json["version"]` is present, MLflow
-uses it unchanged. When absent for a new plugin, MLflow inserts `0.1.0`. When
-absent for an existing plugin, MLflow inserts a unique valid SemVer chosen by a
-simple implementation-defined heuristic. In every stored entity,
-`version == plugin_json["version"]`.
+**Version validation.** When `plugin_json["version"]` is present, MLflow
+validates it as SemVer. Semverish inputs (e.g., `1.0`) are normalized to full
+SemVer (e.g., `1.0.0`). Non-SemVer version strings are rejected. When absent
+for a new plugin, MLflow inserts `0.1.0`. When absent for an existing plugin,
+MLflow inserts a unique valid SemVer chosen by a simple implementation-defined
+heuristic. In every stored entity, `version == plugin_json["version"]`.
 
 **Manifest synthesis.** For an assembled plugin, both registration and
 low-level version creation may receive `plugin_json=None`. The server-side
@@ -497,10 +498,10 @@ generated version before storing the entity. Monolithic import always supplies
 a complete manifest after validation or adapter translation. Persistence never
 stores a null or incomplete canonical payload.
 
-**Latest resolution.** Active candidates take precedence. When all eligible
-candidates are valid SemVer, semantic precedence selects latest. If semantic
-ordering is unavailable, creation time selects latest. The same fallback is
-applied to non-deleted non-active candidates when no active version exists.
+**Latest resolution.** Active candidates take precedence. Semantic precedence
+selects latest. Creation time breaks ties (e.g., versions differing only in
+build metadata). The same rule applies to non-deleted non-active candidates
+when no active version exists.
 
 **Agent plugin-level source.** An agent plugin version is either monolithic or
 assembled, never both. All versions of a given agent plugin must be the
@@ -563,19 +564,22 @@ are present, the second is either a version (if it parses as an
 integer) or the URI is `organization/name` (if it does not). When
 one segment is present, it is the name with no organization.
 
-Agent plugins use a separate, fixed-shape URI because their versions are
-strings. The empty organization is always represented by `_`:
+Agent plugins use a separate URI scheme because their versions are
+strings. When organization is empty it is omitted; since all versions
+are valid SemVer, the parser can distinguish `name/version` from
+`org/name` by checking whether the last segment is a SemVer string:
 
 | Pattern | Meaning | Example |
 |---------|---------|---------|
-| `agent-plugins:/org-or-_/name` | Agent plugin parent | `agent-plugins:/_/pr-workflow` |
-| `agent-plugins:/org-or-_/name/version` | Exact version | `agent-plugins:/_/pr-workflow/1.0.0-beta.11` |
-| `agent-plugins:/org-or-_/name@alias` | Resolve through an alias | `agent-plugins:/_/pr-workflow@production` |
+| `agent-plugins:/name` | Agent plugin parent (no org) | `agent-plugins:/pr-workflow` |
+| `agent-plugins:/org/name` | Agent plugin parent (with org) | `agent-plugins:/acme/pr-workflow` |
+| `agent-plugins:/name/version` | Exact version (no org) | `agent-plugins:/pr-workflow/1.0.0-beta.11` |
+| `agent-plugins:/org/name/version` | Exact version (with org) | `agent-plugins:/acme/pr-workflow/1.0.0` |
+| `agent-plugins:/name@alias` | Resolve through an alias | `agent-plugins:/pr-workflow@production` |
+| `agent-plugins:/org/name@alias` | Resolve through an alias (with org) | `agent-plugins:/acme/pr-workflow@production` |
 
-Agent plugin versions in URIs must be nonempty, fit within the database field,
-and cannot contain `/`, `@`, `#`, or `?`. They do not need to be valid SemVer.
-The fixed organization segment means the parser never needs to guess whether a
-string is a name or version.
+Agent plugin versions in URIs must be nonempty, valid SemVer, fit within the
+database field, and cannot contain `/`, `@`, `#`, or `?`.
 
 In the CLI, skill commands accept `--skill-uri` and agent plugin commands
 accept `--plugin-uri`.
@@ -1239,9 +1243,9 @@ reimplementing inference in every language, and prepares for future
 server-side content inspection (e.g., signature verification).
 
 For agent plugins, `POST /register` and version creation validate the submitted
-canonical `plugin_json`. The server extracts and checks `name`, preserves a
-supplied version string, or assigns and inserts a valid SemVer string when it is
-absent. The server does not fetch remote package content. Client-side
+canonical `plugin_json`. The server extracts and checks `name`, validates the
+supplied version as SemVer (normalizing semverish values), or assigns and
+inserts a valid SemVer string when the version is absent. The server does not fetch remote package content. Client-side
 `import_plugin()` performs source fetching, format detection, filesystem
 validation, and adapter translation before submitting the canonical payload and
 member references.
@@ -1547,8 +1551,10 @@ storage paths:
 
 Agent plugin names instead follow the canonical Agent Plugins constraints:
 1–64 lowercase ASCII letters, digits, hyphens, and periods; alphanumeric first
-and last characters; and no consecutive hyphens or periods. MLflow applies the
-same organization constraints around that standard name.
+and last characters; and no consecutive hyphens or periods. Additionally, agent
+plugin names that are parseable as valid SemVer are rejected, because the URI
+parser uses SemVer recognition to distinguish `name/version` from `org/name`.
+MLflow applies the same organization constraints around that standard name.
 
 ## Python SDK and CLI
 

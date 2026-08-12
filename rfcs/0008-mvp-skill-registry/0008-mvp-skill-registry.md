@@ -225,7 +225,7 @@ infrastructure; registry-specific trace linkage (SKILL spans,
    select the source type, fill in the fields, then submit.
 2. Register an assembled agent plugin version that pins these members:
    ```bash
-   mlflow agent-plugins register --plugin-uri agent-plugins:/_/pr-workflow \
+   mlflow agent-plugins register --plugin-uri agent-plugins:/pr-workflow \
        --skill skills:/code-review/1 \
        --skill skills:/style-check/1
    ```
@@ -237,14 +237,14 @@ infrastructure; registry-specific trace linkage (SKILL spans,
    transition to `draft` for further review before making it
    available:
    ```bash
-   mlflow agent-plugins update-version --plugin-uri agent-plugins:/_/pr-workflow/0.1.0 \
+   mlflow agent-plugins update-version --plugin-uri agent-plugins:/pr-workflow/0.1.0 \
        --status draft
    ```
    **UI path:** Open the agent plugin version detail page, use the status
    dropdown to change from "active" to "draft."
 4. Set an alias for stable downstream resolution:
    ```bash
-   mlflow agent-plugins set-alias --plugin-uri agent-plugins:/_/pr-workflow \
+   mlflow agent-plugins set-alias --plugin-uri agent-plugins:/pr-workflow \
        --alias production --version 0.1.0
    ```
    **UI path:** In the agent plugin detail page, click "Add Alias" and map
@@ -314,13 +314,13 @@ infrastructure; registry-specific trace linkage (SKILL spans,
    The skill detail includes agent plugin memberships.
 3. Create a new version of the agent plugin with the updated member:
    ```bash
-   mlflow agent-plugins create-version --plugin-uri agent-plugins:/_/pr-workflow \
+   mlflow agent-plugins create-version --plugin-uri agent-plugins:/pr-workflow \
        --plugin-json ./plugin-1.1.0.json \
        --skill skills:/code-review/2 \
        --skill skills:/style-check/1
    ```
 4. The previous agent plugin version is unchanged. Agents using
-   aliases like `agent-plugins:/_/pr-workflow@production` continue to resolve
+   aliases like `agent-plugins:/pr-workflow@production` continue to resolve
    to the old version until the alias is updated.
 
 #### Discover a skill for a specific purpose
@@ -366,7 +366,7 @@ can autonomously explore execution traces via MCP tools.
    mlflow skills register git --skill-uri skills:/code-review \
        --url https://github.com/acme/agent-skills.git \
        --ref v2.0.0 --subpath code-review
-   mlflow agent-plugins create-version --plugin-uri agent-plugins:/_/pr-workflow \
+   mlflow agent-plugins create-version --plugin-uri agent-plugins:/pr-workflow \
        --plugin-json ./plugin-1.1.0.json \
        --skill skills:/code-review/2 \
        --skill skills:/style-check/1 \
@@ -385,9 +385,9 @@ can autonomously explore execution traces via MCP tools.
 6. If version `1.1.0` is better, transition it to active and update the
    production alias:
    ```bash
-   mlflow agent-plugins update-version --plugin-uri agent-plugins:/_/pr-workflow/1.1.0 \
+   mlflow agent-plugins update-version --plugin-uri agent-plugins:/pr-workflow/1.1.0 \
        --status active
-   mlflow agent-plugins set-alias --plugin-uri agent-plugins:/_/pr-workflow \
+   mlflow agent-plugins set-alias --plugin-uri agent-plugins:/pr-workflow \
        --alias production --version 1.1.0
    ```
 
@@ -433,7 +433,7 @@ both against the same inputs and scorers.
    mlflow skills register git --skill-uri skills:/code-review \
        --url https://github.com/acme/agent-skills.git \
        --ref v1.1.0 --subpath code-review
-   mlflow agent-plugins create-version --plugin-uri agent-plugins:/_/pr-workflow \
+   mlflow agent-plugins create-version --plugin-uri agent-plugins:/pr-workflow \
        --plugin-json ./plugin-1.1.0.json \
        --skill skills:/code-review/2 \
        --skill skills:/style-check/1 \
@@ -598,10 +598,11 @@ The full manifest is stored in a JSON column following RFC-0004's hybrid
 `server_json` precedent. MLflow-managed fields remain outside the payload.
 
 The registry version is a string equal to `plugin_json["version"]`. A supplied
-version is preserved. When the optional manifest field is absent, MLflow assigns
-a unique valid SemVer value, using `0.1.0` for a new plugin and an
-implementation-defined SemVer heuristic for later versions, then inserts it
-into the stored payload.
+version must be valid SemVer (or semverish, e.g., `1.0` is normalized to
+`1.0.0`). Non-SemVer version strings are rejected. When the optional manifest
+field is absent, MLflow assigns a unique valid SemVer value, using `0.1.0` for
+a new plugin and an implementation-defined SemVer heuristic for later versions,
+then inserts it into the stored payload.
 
 An assembled plugin may omit `plugin_json` entirely. In that case, the
 server-side registry layer synthesizes a minimal valid manifest from the parent
@@ -733,12 +734,11 @@ is treated as a convenience alias for
 `get_latest_skill_version(name, organization)`.
 
 Agent plugin versions instead use the immutable string extracted from or added
-to `plugin_json["version"]`. Among eligible `active` versions, semantic
-precedence selects `latest` when every candidate is valid SemVer. If any
-candidate cannot be semantically ordered, creation time selects the most
-recent. Creation time also breaks equal SemVer precedence, such as versions
-that differ only in build metadata. When there is no active version, the same
-rule applies to non-`deleted` non-`active` candidates.
+to `plugin_json["version"]`. All versions are valid SemVer (semverish inputs
+are normalized on creation). Among eligible `active` versions, semantic
+precedence selects `latest`. Creation time breaks equal SemVer precedence,
+such as versions that differ only in build metadata. When there is no active
+version, the same rule applies to non-`deleted` non-`active` candidates.
 
 The reserved alias behavior also applies to agent plugins:
 `set_agent_plugin_alias(name, alias="latest", organization, ...)`
@@ -748,8 +748,9 @@ delegates to
 `get_latest_agent_plugin_version(name, organization)`.
 
 This aligns with the MCP Server Registry's use of publisher-supplied canonical
-versions while accommodating the Agent Plugins specification's optional,
-not-necessarily-SemVer `version` field.
+versions and its enforcement of SemVer for version ordering. The Agent Plugins
+specification recommends but does not require SemVer; MLflow is opinionated
+here in favor of predictable latest resolution.
 
 > **Skill versioning divergence from RFC-0004.** Skills continue to use
 > server-assigned monotonic integers because the Agent Skills format does not
@@ -796,10 +797,11 @@ identifier is recognized.
 
 For Claude Code and generic inputs, an adapter constructs a minimal canonical
 Agent Plugins manifest while preserving available metadata. If the canonical
-manifest supplies `version`, MLflow uses it. Otherwise MLflow assigns a unique
-valid SemVer value, using `0.1.0` for a new plugin and an
-implementation-defined heuristic for later imports, and inserts that value into
-the stored payload.
+manifest supplies `version`, MLflow validates it as SemVer (normalizing
+semverish values like `1.0` to `1.0.0`) and rejects non-SemVer strings.
+Otherwise MLflow assigns a unique valid SemVer value, using `0.1.0` for a new
+plugin and an implementation-defined heuristic for later imports, and inserts
+that value into the stored payload.
 
 The client creates embedded skill versions without individual source pointers
 and records each directory as the `#subpath` fragment in the member URI. It then
