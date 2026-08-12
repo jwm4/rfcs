@@ -1223,6 +1223,10 @@ nulling.
 client calls `get_skill_version` (or resolves an alias) to obtain the
 source pointer, then fetches content locally using source-type-specific
 logic (git clone, OCI pull, ZIP download, or MLflow artifact download).
+For agent plugin pulls, the stored `plugin.json` manifest is always
+written to the destination root. Assembled plugin members are placed
+under `skills/<member-name>/` to match the Agent Plugins `skills/*/SKILL.md`
+discovery layout, making the result a conformant Agent Plugins package.
 This keeps the store as a pure data-access layer.
 
 ## REST API

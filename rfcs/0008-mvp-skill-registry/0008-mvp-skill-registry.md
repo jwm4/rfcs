@@ -862,10 +862,13 @@ agent plugin.
 
 **Agent plugin pull.** For monolithic agent plugins, fetch the agent plugin
 artifact as a single unit to the destination directory. For assembled
-agent plugins, pull each member individually from its own `source` to a
-subdirectory of the destination, named by the member's name. If a
-skill member in an assembled agent plugin has no `source`, the pull fails
-rather than producing a partial local agent plugin.
+agent plugins, pull each member individually from its own `source` to
+`skills/<member-name>/` under the destination, matching the Agent Plugins
+`skills/*/SKILL.md` discovery layout. If a skill member in an assembled
+agent plugin has no `source`, the pull fails rather than producing a
+partial local agent plugin. In both cases, the stored `plugin.json`
+manifest is written to the destination root, making the pulled result a
+conformant Agent Plugins package.
 
 `pull` is harness-agnostic. It downloads content but does not generate
 harness-specific manifests or place files in harness-specific
