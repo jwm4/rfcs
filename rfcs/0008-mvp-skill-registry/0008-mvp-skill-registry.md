@@ -97,18 +97,25 @@ canonical Agent Plugins model.
 
 ```python
 import mlflow
+from mlflow.genai import GitSource
 
-# Minimal: name inferred from SKILL.md content, source_type from URL
+# Minimal: name inferred from SKILL.md content
 mlflow.genai.register_skill(
-    source="https://github.com/acme/agent-skills.git@v1.0.0",
-    subpath="code-review",
+    source=GitSource(
+        url="https://github.com/acme/agent-skills.git",
+        ref="v1.0.0",
+        subpath="code-review",
+    ),
 )
 
-# With explicit subpath
+# With explicit name
 mlflow.genai.register_skill(
     name="code-review",
-    source="https://github.com/acme/agent-skills.git@v1.0.0",
-    subpath="code-review",
+    source=GitSource(
+        url="https://github.com/acme/agent-skills.git",
+        ref="v1.0.0",
+        subpath="code-review",
+    ),
 )
 ```
 
@@ -134,8 +141,8 @@ mlflow.genai.register_agent_plugin(
 
 ```bash
 mlflow agent-plugins import \
-    --source https://github.com/acme/plugins.git@v1.0.0 \
-    --subpath pr-workflow
+    --source https://github.com/acme/plugins.git \
+    --ref v1.0.0 --subpath pr-workflow
 ```
 
 MLflow auto-detects a standard Agent Plugins package before falling back to the
@@ -188,31 +195,34 @@ infrastructure; registry-specific trace linkage (SKILL spans,
 
 1. Register individual skill versions pointing to their sources:
    ```bash
-   # Minimal: name and source type inferred
-   mlflow skills register \
-       --source https://github.com/acme/agent-skills.git@v1.0.0 \
-       --subpath code-review
+   # Minimal: name inferred from SKILL.md
+   mlflow skills register git \
+       --url https://github.com/acme/agent-skills.git \
+       --ref v1.0.0 --subpath code-review
    # Explicit: all fields specified
-   mlflow skills register --skill-uri skills:/code-review \
-       --source https://github.com/acme/agent-skills.git@v1.0.0 \
-       --subpath code-review
-   mlflow skills register --skill-uri skills:/style-check \
-       --source https://github.com/acme/agent-skills.git@v2.0.0 \
-       --subpath style-check
+   mlflow skills register git --skill-uri skills:/code-review \
+       --url https://github.com/acme/agent-skills.git \
+       --ref v1.0.0 --subpath code-review
+   mlflow skills register git --skill-uri skills:/style-check \
+       --url https://github.com/acme/agent-skills.git \
+       --ref v2.0.0 --subpath style-check
    ```
    **SDK equivalent:**
    ```python
    import mlflow
+   from mlflow.genai import GitSource
 
    mlflow.genai.register_skill(
        name="code-review",
-       source="https://github.com/acme/agent-skills.git@v1.0.0",
-       subpath="code-review",
+       source=GitSource(
+           url="https://github.com/acme/agent-skills.git",
+           ref="v1.0.0",
+           subpath="code-review",
+       ),
    )
    ```
    **UI path:** Navigate to the Skills page, click "Register Skill,"
-   fill in the source URL (name and source type are
-   inferred when omitted), then submit.
+   select the source type, fill in the fields, then submit.
 2. Register an assembled agent plugin version that pins these members:
    ```bash
    mlflow agent-plugins register --plugin-uri agent-plugins:/_/pr-workflow \
@@ -245,8 +255,8 @@ infrastructure; registry-specific trace linkage (SKILL spans,
 1. Import a plugin from a remotely accessible source:
    ```bash
    mlflow agent-plugins import \
-       --source https://github.com/acme/plugins.git@v1.0.0 \
-       --subpath pr-workflow
+       --source https://github.com/acme/plugins.git \
+       --ref v1.0.0 --subpath pr-workflow
    ```
 2. MLflow fetches the source to a temporary directory in the client
    environment and auto-detects the input format. A recognized root
@@ -274,8 +284,8 @@ infrastructure; registry-specific trace linkage (SKILL spans,
    new source:
    ```bash
    mlflow agent-plugins import \
-       --source https://github.com/acme/plugins.git@v2.0.0 \
-       --subpath pr-workflow
+       --source https://github.com/acme/plugins.git \
+       --ref v2.0.0 --subpath pr-workflow
    ```
 2. MLflow uses or generates the incoming manifest version and rejects the
    import if that immutable agent plugin version already exists. It looks up
@@ -293,9 +303,9 @@ infrastructure; registry-specific trace linkage (SKILL spans,
 
 1. A new version of the `code-review` skill is registered:
    ```bash
-   mlflow skills register --skill-uri skills:/code-review \
-       --source https://github.com/acme/agent-skills.git@v2.0.0 \
-       --subpath code-review
+   mlflow skills register git --skill-uri skills:/code-review \
+       --url https://github.com/acme/agent-skills.git \
+       --ref v2.0.0 --subpath code-review
    ```
 2. Find assembled agent plugins that include `code-review`:
    ```bash
@@ -353,9 +363,9 @@ can autonomously explore execution traces via MCP tools.
 1. Register a new skill version and create a draft agent plugin
    version for evaluation:
    ```bash
-   mlflow skills register --skill-uri skills:/code-review \
-       --source https://github.com/acme/agent-skills.git@v2.0.0 \
-       --subpath code-review
+   mlflow skills register git --skill-uri skills:/code-review \
+       --url https://github.com/acme/agent-skills.git \
+       --ref v2.0.0 --subpath code-review
    mlflow agent-plugins create-version --plugin-uri agent-plugins:/_/pr-workflow \
        --plugin-json ./plugin-1.1.0.json \
        --skill skills:/code-review/2 \
@@ -420,9 +430,9 @@ both against the same inputs and scorers.
 2. The job registers a new skill version and creates a draft agent
    plugin version for evaluation:
    ```bash
-   mlflow skills register --skill-uri skills:/code-review \
-       --source https://github.com/acme/agent-skills.git@v1.1.0 \
-       --subpath code-review
+   mlflow skills register git --skill-uri skills:/code-review \
+       --url https://github.com/acme/agent-skills.git \
+       --ref v1.1.0 --subpath code-review
    mlflow agent-plugins create-version --plugin-uri agent-plugins:/_/pr-workflow \
        --plugin-json ./plugin-1.1.0.json \
        --skill skills:/code-review/2 \

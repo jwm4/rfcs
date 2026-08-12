@@ -36,6 +36,7 @@ PrimaryKey: `(workspace, organization, name)`.
 | `version` | `Integer` | PK, server-assigned monotonic integer |
 | `source_type` | `String(20)` | nullable; `git`, `oci`, `zip`, `mlflow` |
 | `source` | `String(2048)` | nullable pointer to skill content |
+| `ref` | `String(2048)` | nullable; git branch, tag, or commit |
 | `subpath` | `String(2048)` | nullable; path within the artifact |
 | `status` | `String(20)` | default `'active'` |
 | `created_by` | `String(256)` | |
@@ -117,6 +118,7 @@ PrimaryKey: `(workspace, organization, name)`.
 | `search_text` | `Text` | derived discovery projection of manifest description, keywords, and author name |
 | `source_type` | `String(20)` | optional; `git`, `oci`, `zip`, `mlflow` |
 | `source` | `String(2048)` | optional pointer to agent plugin |
+| `ref` | `String(2048)` | nullable; git branch, tag, or commit |
 | `subpath` | `String(2048)` | nullable; path within the artifact |
 | `status` | `String(20)` | default `'active'` |
 | `created_by` | `String(256)` | |
@@ -276,13 +278,30 @@ class SkillSourceType(StrEnum):
 
 
 @dataclass
+class GitSource:
+    url: str
+    ref: str | None = None
+    subpath: str | None = None
+
+
+@dataclass
+class OCISource:
+    image: str
+    subpath: str | None = None
+
+
+@dataclass
+class ZipSource:
+    url: str
+    subpath: str | None = None
+
+
+@dataclass
 class SkillVersion:
     name: str
     version: int
     organization: str = ""
-    source_type: SkillSourceType | None = None
-    source: str | None = None
-    subpath: str | None = None
+    source: GitSource | OCISource | ZipSource | None = None
     status: SkillStatus = SkillStatus.ACTIVE
 
     tags: dict[str, str] = field(default_factory=dict)
@@ -299,9 +318,7 @@ class SkillVersion:
 | `name` | `str` | Skill name (part of composite key with workspace and organization) |
 | `version` | `int` | Server-assigned monotonic integer. Each new version receives the next integer |
 | `organization` | `str` | Organization scope, from parent Skill |
-| `source_type` | `SkillSourceType` | Server-inferred distribution mechanism: `git`, `oci`, `zip`, `mlflow`. Inferred from the `source` URL scheme |
-| `source` | `str` | Pointer to the content in the source system. Required for standalone pull. May be omitted only when the version's content lives within an agent plugin-level artifact, in which case the containing agent plugin membership identifies the embedded content path |
-| `subpath` | `str` | Optional path within the artifact where this skill's content lives. See subpath usage table below |
+| `source` | `GitSource \| OCISource \| ZipSource \| None` | Typed source descriptor. The server infers the type from the URL scheme and returns the appropriate class. `None` for embedded skills in monolithic agent plugins and for MLflow artifact storage (where the path is derived from identity). The REST API represents this as flat `source_type`, `source`, `ref`, `subpath` fields; the SDK wraps and unwraps the typed classes |
 | `status` | `SkillStatus` | Per-version lifecycle: `draft`, `active`, `deprecated`, `deleted` |
 | `aliases` | `list[str]` | Alias names currently pointing at this version (read-only, projected from alias table) |
 
@@ -317,25 +334,23 @@ using the same SKILL.md directory structure. An `opensharing` source
 type would let the registry govern and track skills whose content is
 shared via OpenSharing's credential-vending protocol.
 
-**Subpath usage by source type.** The `subpath` field separates "what
-to download" from "where inside the downloaded content the relevant
-asset lives." Its applicability varies by source type:
+**Typed source classes.** Each source type has a dedicated class with
+only the fields relevant to that type:
 
-| Source type | `subpath` usage |
-|---|---|
-| `oci` | Path within the OCI image (e.g., `plugins/code-review`). Used when multiple skills share a single image. |
-| `zip` | Path within the archive (e.g., `plugins/code-review`). Used when multiple skills share a single archive. |
-| `git` | Path within the repository (e.g., `code-review`). Used when the skill content is not at the repository root. The `source` field contains the clone URL with `@<ref>` suffix; `subpath` locates the content within the repo. |
-| `mlflow` | Not used. The artifact path is derived from the skill ID and version. |
+| Class | Fields | Description |
+|---|---|---|
+| `GitSource` | `url`, `ref`, `subpath` | Git repository. `url` is the clone URL. `ref` is the branch, tag, or commit (optional; defaults to the repository's default branch). `subpath` is the path within the repo (optional). |
+| `OCISource` | `image`, `subpath` | OCI image. `image` is the image reference. `subpath` is the path within the image (optional). |
+| `ZipSource` | `url`, `subpath` | ZIP archive. `url` is the archive URL. `subpath` is the path within the archive (optional). |
 
-**Git source format.** For `source_type="git"`, `source` is a Git
-clone URL with an `@<ref>` suffix to identify the branch, tag, or
-commit (e.g., `https://github.com/acme/agent-skills.git@v1.0.0`).
-The `subpath` field identifies the path within the repository where
-the skill content lives (e.g., `code-review`). This separates the
-clone target, the ref, and the content path into distinct fields
-rather than relying on hosting-provider-specific tree URL conventions.
-Mutable refs (branches, tags) are allowed.
+MLflow artifact storage does not use a source class. When `source`
+is `None`, the artifact path is derived from the skill's identity
+and version.
+
+The REST API represents these as flat fields (`source_type`,
+`source`, `ref`, `subpath`); the SDK converts between typed classes
+and flat fields. The server infers `source_type` from the source URL
+and returns it in responses so the SDK can reconstruct the typed class.
 
 **MLflow artifact storage (`source_type="mlflow"`).** In addition to
 external source pointers, the registry supports storing skill content
@@ -387,10 +402,10 @@ version represents a single logical version of a capability;
 `source` describes where to find it but is not part of its
 identity.
 
-**Immutability contract.** `source_type`, `source`, `subpath`,
-and `version` are immutable after creation. To point
-to different content, register a new version. Mutable fields
-(`status`, `tags`) can be updated independently.
+**Immutability contract.** `source` and `version` are immutable
+after creation. To point to different content, register a new
+version. Mutable fields (`status`, `tags`) can be updated
+independently.
 
 ### AgentPlugin entity
 
@@ -442,9 +457,7 @@ class AgentPluginVersion:
     version: str
     organization: str = ""
     plugin_json: dict[str, Any] = field(default_factory=dict)
-    source_type: SkillSourceType | None = None
-    source: str | None = None
-    subpath: str | None = None
+    source: GitSource | OCISource | ZipSource | None = None
 
     status: SkillStatus = SkillStatus.ACTIVE
     tags: dict[str, str] = field(default_factory=dict)
@@ -494,20 +507,19 @@ assembled, never both. All versions of a given agent plugin must be the
 same kind; the server rejects a version whose kind differs from
 existing versions of the same agent plugin.
 
-- **Monolithic:** has its own `source_type`, `source`, and `subpath`,
-  pointing to a single artifact (e.g., an OCI
-  image or Git repo) that contains the complete agent plugin. `pull`
-  fetches the agent plugin as a unit. Member skill versions may
-  omit their own `source` because the agent plugin is the
-  authoritative source. Every source-less member must include a
-  `#subpath` fragment in its URI identifying where it lives inside
-  the agent plugin (e.g., `skills:/name/1#skills/name`).
+- **Monolithic:** has its own typed source (e.g., a `GitSource` or
+  `OCISource`) pointing to a single artifact that contains the
+  complete agent plugin. `pull` fetches the agent plugin as a unit.
+  Member skill versions may omit their own `source` because the
+  agent plugin is the authoritative source. Every source-less member
+  must include a `#subpath` fragment in its URI identifying where it
+  lives inside the agent plugin (e.g., `skills:/name/1#skills/name`).
 - **Assembled:** has individual member references. Each skill member
   has its own source. `pull` fetches members individually. If a skill
   member has no source, `pull` fails rather than producing a partial
-  local agent plugin. For assembled agent plugins, member URIs must not include
-  a `#subpath` fragment because the member's own `source` and
-  `subpath` identify its content.
+  local agent plugin. For assembled agent plugins, member URIs must
+  not include a `#subpath` fragment because the member's own source
+  identifies its content.
 
 The API rejects a member URI with a `#subpath` fragment when the
 member version has its own source. It also rejects a source-less member
@@ -642,6 +654,7 @@ class SkillRegistryMixin:
         organization: str = "",
         source_type: str | None = None,
         source: str | None = None,
+        ref: str | None = None,
         subpath: str | None = None,
         status: str = "active",
     ) -> SkillVersion:
@@ -778,6 +791,7 @@ class SkillRegistryMixin:
         skills: list[str] | None = None,
         source_type: str | None = None,
         source: str | None = None,
+        ref: str | None = None,
         subpath: str | None = None,
         status: str = "active",
     ) -> AgentPluginVersion:
@@ -899,8 +913,7 @@ def register_skill(
     *,
     name: str | None = None,
     organization: str = "",
-    source: str | None = None,
-    subpath: str | None = None,
+    source: GitSource | OCISource | ZipSource | str | None = None,
     status: str = "active",
 ) -> SkillVersion:
     """Register a skill version. The server assigns the next
@@ -912,10 +925,12 @@ def register_skill(
     (register_mcp_server). If name is omitted, the name is
     extracted from the skill's SKILL.md entry point (server-side
     for remote sources, client-side for local paths). The server
-    infers source_type from the source URL (.git suffix or git://
-    = git, oci:// = oci, .zip = zip). If source is a local path
-    (no :// scheme), the client uploads the files through existing
-    MLflow artifact APIs."""
+    infers source_type from the source URL. A typed source class
+    (GitSource, OCISource, ZipSource) is converted to flat REST
+    fields; a plain string is also accepted for convenience and
+    passed as the source field with type inferred by the server.
+    If source is a local path (no :// scheme), the client uploads
+    the files through existing MLflow artifact APIs."""
 
 
 def create_skill(
@@ -954,8 +969,7 @@ def create_skill_version(
     *,
     name: str,
     organization: str = "",
-    source: str | None = None,
-    subpath: str | None = None,
+    source: GitSource | OCISource | ZipSource | str | None = None,
 ) -> SkillVersion: ...
 
 
@@ -1005,8 +1019,7 @@ def create_agent_plugin_version(
     organization: str = "",
     plugin_json: dict[str, Any] | None = None,
     skills: list[str] | None = None,
-    source: str | None = None,
-    subpath: str | None = None,
+    source: GitSource | OCISource | ZipSource | str | None = None,
     status: str = "active",
 ) -> AgentPluginVersion: ...
 
@@ -1017,8 +1030,7 @@ def register_agent_plugin(
     name: str | None = None,
     organization: str = "",
     skills: list[str] | None = None,
-    source: str | None = None,
-    subpath: str | None = None,
+    source: GitSource | OCISource | ZipSource | str | None = None,
     status: str = "active",
 ) -> AgentPluginVersion:
     """Validate or synthesize a canonical manifest, create or reuse the
@@ -1144,18 +1156,16 @@ class PluginImportResult:
 
 def introspect_plugin(
     *,
-    source: str,
-    subpath: str | None = None,
+    source: GitSource | OCISource | ZipSource | str,
 ) -> PluginIntrospectionResult:
     """Inspect a local or remote plugin without modifying the registry."""
 
 
 def import_plugin(
     *,
-    source: str,
+    source: GitSource | OCISource | ZipSource | str,
     plugin_name: str | None = None,
     organization: str = "",
-    subpath: str | None = None,
 ) -> PluginImportResult:
     """Import a plugin as a monolithic agent plugin.
 
@@ -1163,7 +1173,9 @@ def import_plugin(
     validates or constructs canonical plugin_json; discovers and registers
     skills; and preserves the package source. Recognized mcp.json content is
     reported but not registered. plugin_name is used only when the selected
-    adapter cannot derive a name. The server infers source_type from the URL.
+    adapter cannot derive a name. A typed source class (GitSource, OCISource,
+    ZipSource) is converted to flat REST fields; a plain string is also
+    accepted for convenience.
     """
 
 
@@ -1181,7 +1193,10 @@ def pull(
 
 
 # Example usage:
-version = mlflow.genai.register_skill(name="code-review", source="https://github.com/acme/skills.git@v1.0.0")
+version = mlflow.genai.register_skill(
+    name="code-review",
+    source=GitSource(url="https://github.com/acme/skills.git", ref="v1.0.0"),
+)
 # version.name and version.organization identify the skill for subsequent operations
 skills = mlflow.genai.search_skills(filter_string="status = 'active'")
 ```
@@ -1212,13 +1227,13 @@ SKILL.md entry point. If the server cannot access the source (e.g.,
 private repositories requiring client-side credentials), registration
 fails with an error indicating that `name` must be provided explicitly.
 The server always infers `source_type` from the
-`source` value: `.git` before the `@ref` portion or `git://` scheme
+`source` value: `.git` suffix or `git://` scheme
 = git, `oci://` = oci, `.zip` = zip, and null `source` = mlflow
 (content stored in MLflow artifact storage). The one exception is
-embedded skills created during agent plugin import, where the
-importer sets `source_type`, `source`, and `subpath` all to null
-because the content lives inside the agent plugin artifact rather
-than in standalone storage. `source_type` is not a user-facing
+embedded skills created during agent plugin import, where
+`source` is `None` (no typed source class, no `ref`) because the
+content lives inside the agent plugin artifact rather than in
+standalone storage. `source_type` is not a user-facing
 parameter. This keeps SDKs as thin REST wrappers, avoids
 reimplementing inference in every language, and prepares for future
 server-side content inspection (e.g., signature verification).
@@ -1351,6 +1366,7 @@ class CreateSkillVersionRequest(BaseModel):
     name: str | None = None  # optional for POST /register (inferred from source when omitted); ignored for POST /{organization}/{name}/versions (name from parent)
     organization: str = ""  # for POST /register only; ignored for versioned paths
     source: str | None = None
+    ref: str | None = None
     subpath: str | None = None
     status: str = "active"
 
@@ -1388,6 +1404,7 @@ class CreateAgentPluginVersionRequest(BaseModel):
     plugin_json: PluginJSONPayload | None = None
     skills: list[str] | None = None
     source: str | None = None
+    ref: str | None = None
     subpath: str | None = None
     status: str = "active"
 
@@ -1432,6 +1449,7 @@ class SkillVersionResponse(BaseModel):
     organization: str = ""
     source_type: str | None = None
     source: str | None = None
+    ref: str | None = None
     subpath: str | None = None
     status: str = "active"
     aliases: list[str] = Field(default_factory=list)
@@ -1463,6 +1481,7 @@ class AgentPluginVersionResponse(BaseModel):
     plugin_json: dict[str, Any]
     source_type: str | None = None
     source: str | None = None
+    ref: str | None = None
     subpath: str | None = None
     status: str = "active"
     skills: list[str] = Field(default_factory=list)
@@ -1544,7 +1563,10 @@ same operations from the command line. Commands accept `--name` and optional
 
 | CLI subcommand | SDK function | Description |
 |---|---|---|
-| `mlflow skills register` | `register_skill()` | Register a skill version (auto-creates parent) |
+| `mlflow skills register git` | `register_skill(source=GitSource(...))` | Register from a Git repository |
+| `mlflow skills register oci` | `register_skill(source=OCISource(...))` | Register from an OCI image |
+| `mlflow skills register zip` | `register_skill(source=ZipSource(...))` | Register from a ZIP archive |
+| `mlflow skills register` | `register_skill(source="./local-path")` | Register from a local directory (uploaded to MLflow artifact storage) |
 | `mlflow skills get` | `get_skill()` | Get skill metadata |
 | `mlflow skills search` | `search_skills()` | Search skills |
 | `mlflow skills get-version` | `get_skill_version()` | Get a specific version |
@@ -1622,15 +1644,15 @@ specified above.
 ### Registration behavior
 
 For each discovered skill, the importer creates a `SkillVersion` whose
-version is server-assigned and whose `source_type`, `source`,
-and `subpath` are null. The importer records the skill's plugin-relative
+version is server-assigned and whose `source` is `None` (no typed source
+class, no `ref`). The importer records the skill's plugin-relative
 directory as the `#subpath` fragment in the member URI (e.g.,
 `skills:/embedded-review/1#skills/embedded-review`).
 
 After registering the embedded skills, the importer creates one
-monolithic `AgentPluginVersion` with the original `source_type`,
-`source`, and `subpath`, the immutable canonical `plugin_json`, and member
-references for all discovered skills. This preserves a pullable link to the
+monolithic `AgentPluginVersion` with the original typed source
+(preserving `ref` for Git sources), the immutable canonical
+`plugin_json`, and member references for all discovered skills. This preserves a pullable link to the
 complete original package while keeping registry membership limited to skills.
 A valid package with no skills creates an agent plugin version with an empty
 member list.
@@ -1709,14 +1731,18 @@ import mlflow
 
 mlflow.genai.register_skill(
     name="code-review",
-    source="oci://ghcr.io/acme/agent-plugin:v1.0.0",
-    subpath="skills/code-review",
+    source=OCISource(
+        image="ghcr.io/acme/agent-plugin:v1.0.0",
+        subpath="skills/code-review",
+    ),
 )
 
 mlflow.genai.register_skill(
     name="test-coverage",
-    source="oci://ghcr.io/acme/agent-plugin:v1.0.0",
-    subpath="skills/test-coverage",
+    source=OCISource(
+        image="ghcr.io/acme/agent-plugin:v1.0.0",
+        subpath="skills/test-coverage",
+    ),
 )
 
 # Assembled agent plugin: each member has its own source. With no explicit
@@ -1760,9 +1786,10 @@ version = mlflow.genai.get_skill_version(
     organization=skill.organization,
     version=1,
 )
-# version.source_type == "git"
-# version.source == "https://github.com/acme/agent-skills.git@v1.0.0"
-# version.subpath == "code-review"
+# isinstance(version.source, GitSource)
+# version.source.url == "https://github.com/acme/agent-skills.git"
+# version.source.ref == "v1.0.0"
+# version.source.subpath == "code-review"
 
 # Resolve by alias
 version = mlflow.genai.get_skill_version_by_alias(
