@@ -779,10 +779,9 @@ source, applies the requested subpath, and auto-detects formats in this order:
 3. The generic skill-directory layout previously supported by this RFC.
 
 The standard root manifest takes precedence when more than one marker exists.
-A manifest that declares a recognized Agent Plugins schema but fails validation
-causes import to fail rather than silently falling back to a looser adapter.
-A manifest that declares an unsupported Agent Plugins schema version also
-fails rather than falling back.
+A manifest with an Agent Plugins `$schema` identifier that fails validation
+of required fields causes import to fail rather than silently falling back
+to a looser adapter.
 
 Before importing, users can call `mlflow agent-plugins introspect` or the SDK
 `introspect_plugin()` function to preview the detected format, canonical
@@ -791,12 +790,15 @@ accepts either a local path or a remotely accessible source, and does not
 create registry records. Import still requires a remote source so the
 registered agent plugin retains a pullable source pointer.
 
-For Agent Plugins v1, MLflow applies the standard manifest validation rules and
-discovers immediate child directories matching `skills/*/SKILL.md`. Fatal
-manifest violations reject import. Unknown top-level fields and a non-object
-`extensions` field produce nonfatal warnings and are preserved but ignored
-semantically, as required by the standard. Initially, only the v1.0.0 schema
-identifier is recognized.
+For Agent Plugins v1, MLflow validates the fields it needs (`name`, `version`,
+known structures) and discovers immediate child directories matching
+`skills/*/SKILL.md`. Fatal violations of required fields reject import.
+Unknown top-level fields and a non-object `extensions` field produce nonfatal
+warnings and are preserved but ignored semantically. The `$schema` identifier
+is not gated on a specific version; manifests with newer schema identifiers
+(e.g., `v1.1.0`) are accepted as long as the required fields are present.
+This matches the forward-compatibility approach used by RFC-0004 for MCP
+`server_json`.
 
 For Claude Code and generic inputs, an adapter constructs a minimal canonical
 Agent Plugins manifest while preserving available metadata. If the canonical

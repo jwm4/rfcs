@@ -477,11 +477,11 @@ class AgentPluginVersion:
 extracted from the canonical payload, and an explicitly supplied path name must
 match `plugin_json["name"]`.
 
-**Canonical manifest.** `plugin_json` is validated using the declared Agent
-Plugins schema. Initially MLflow recognizes only v1.0.0. Fatal violations and
-unsupported schema identifiers reject creation. Unknown top-level fields and a
-non-object `extensions` field generate nonfatal warnings, remain preserved in
-the stored payload, and receive no MLflow semantics. The payload is immutable
+**Canonical manifest.** `plugin_json` is validated against the fields MLflow
+requires, using `extra="allow"` to accept and preserve unknown fields. The
+`$schema` identifier is not gated on a specific version. A non-object
+`extensions` field generates a nonfatal warning, remains preserved in the
+stored payload, and receives no MLflow semantics. The payload is immutable
 after creation.
 
 **Version validation.** When `plugin_json["version"]` is present, MLflow
@@ -1540,12 +1540,13 @@ The Prompt Registry is considering adding `organization` for
 similar reasons; this design aligns with that direction.
 
 **Canonical manifest validation.** `PluginJSONPayload` provides typed access to
-known fields, while validation logic implements the Agent Plugins failure
-boundaries that cannot be expressed by a strict Pydantic model alone. Only the
-canonical v1.0.0 `$schema` identifier is initially recognized. Unknown
-top-level fields and a non-object `extensions` field are preserved and reported
-as nonfatal warnings but ignored semantically. Other schema violations are
-fatal. `plugin_json["name"]` must match an explicit path or request name. When the
+known fields using `extra="allow"` so that unknown fields at any level are
+accepted and preserved. The `$schema` identifier is not gated on a specific
+version; manifests with newer schema identifiers are accepted as long as the
+required fields are present. This matches RFC-0004's forward-compatibility
+approach for MCP `server_json`. A non-object `extensions` field is preserved
+and reported as a nonfatal warning but ignored semantically. Missing or
+invalid required fields are fatal. `plugin_json["name"]` must match an explicit path or request name. When the
 manifest does not include a version, the request must supply one. When both
 are present, they must agree.
 
@@ -1642,10 +1643,10 @@ The importer:
 1. Fetches the Git, OCI, ZIP, or MLflow artifact source using the same
    source-type-aware logic as `pull`.
 2. Applies `subpath`, when provided, to select the plugin root.
-3. Checks for a root `plugin.json` declaring the Agent Plugins v1.0.0 schema.
-   When found, it validates the manifest and discovers immediate children at
-   `skills/*/SKILL.md`. A declared but invalid standard manifest fails import.
-   A manifest declaring an unsupported Agent Plugins schema version also fails.
+3. Checks for a root `plugin.json` with an Agent Plugins `$schema` identifier.
+   When found, it validates the required fields and discovers immediate children
+   at `skills/*/SKILL.md`. A manifest missing required fields fails import.
+   Unknown fields and newer schema versions are accepted and preserved.
 4. Otherwise checks for `.claude-plugin/plugin.json`, translates available
    metadata into canonical `plugin_json`, and applies Claude Code discovery.
 5. Otherwise applies the existing generic skill-directory discovery and
