@@ -504,14 +504,14 @@ AgentPluginVersionMember {
   string member_organization
   string member_name
   int member_version
-  string member_subpath
 }
 ```
 
 The `AgentPluginVersionMember` fields are storage columns parsed
 from the member URI string (e.g., `skills:/acme/code-review/1#path`
 decomposes into `member_organization`, `member_name`,
-`member_version`, and `member_subpath`).
+and `member_version`). The `#subpath` fragment is retained in the
+URI string but not stored as a separate column.
 
 #### Skill
 

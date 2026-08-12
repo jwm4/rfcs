@@ -150,7 +150,6 @@ creation_timestamp)` supports both resolution paths.
 | `member_organization` | `String(256)` | PK, FK to `skill_versions` |
 | `member_name` | `String(256)` | PK, FK to `skill_versions` |
 | `member_version` | `Integer` | PK, FK to `skill_versions` |
-| `member_subpath` | `String(2048)` | nullable; parsed from `#subpath` fragment of member URI |
 
 FK: `(plugin_workspace, plugin_organization, plugin_name,
 plugin_version)` references `agent_plugin_versions`, CASCADE
@@ -570,8 +569,9 @@ In the CLI, skill commands accept `--skill-uri` and agent plugin commands
 accept `--plugin-uri`.
 In agent plugin member lists, URIs appear as plain strings in `list[str]`.
 The server parses the URI into its constituent fields
-(`member_organization`, `member_name`, `member_version`,
-`member_subpath`) for storage and validation. Alias URIs are
+(`member_organization`, `member_name`, `member_version`)
+for storage and validation. The `#subpath` fragment is retained in
+the URI string but not stored as a separate column. Alias URIs are
 resolved to a concrete version at the time of the API call.
 
 ## Store interface
