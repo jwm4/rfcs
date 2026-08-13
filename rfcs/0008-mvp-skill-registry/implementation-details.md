@@ -19,6 +19,7 @@ workspace-scoped.
 | `organization` | `String(256)` | PK, default `''` (empty string) |
 | `name` | `String(256)` | PK |
 | `description` | `String(5000)` | |
+| `search_text` | `Text` | derived discovery projection of name and description |
 | `created_by` | `String(256)` | |
 | `last_updated_by` | `String(256)` | |
 | `creation_timestamp` | `BigInteger` | millis since epoch |
@@ -115,7 +116,7 @@ PrimaryKey: `(workspace, organization, name)`.
 | `version_minor` | `Integer` | extracted SemVer minor component |
 | `version_patch` | `Integer` | extracted SemVer patch component |
 | `plugin_json` | `JSON` | immutable canonical Agent Plugins manifest |
-| `search_text` | `Text` | derived discovery projection of manifest description, keywords, and author name |
+| `search_text` | `Text` | derived discovery projection of name, mutable parent description, organization, and the latest-resolved manifest's description, keywords, and author name |
 | `source_type` | `String(20)` | optional; `git`, `oci`, `zip`, `mlflow` |
 | `source` | `String(2048)` | optional pointer to agent plugin |
 | `ref` | `String(2048)` | nullable; git branch, tag, or commit |
@@ -626,7 +627,6 @@ class SkillRegistryMixin:
 
     def search_skills(
         self,
-        search_text: str | None = None,
         filter_string: str | None = None,
         max_results: int = SEARCH_MAX_RESULTS_DEFAULT,
         order_by: list[str] | None = None,
@@ -761,7 +761,6 @@ class SkillRegistryMixin:
 
     def search_agent_plugins(
         self,
-        search_text: str | None = None,
         filter_string: str | None = None,
         max_results: int = SEARCH_MAX_RESULTS_DEFAULT,
         order_by: list[str] | None = None,
@@ -948,7 +947,6 @@ def get_skill(*, name: str, organization: str = "") -> Skill: ...
 
 def search_skills(
     *,
-    search_text: str | None = None,
     filter_string: str | None = None,
     max_results: int = 100,
     order_by: list[str] | None = None,
@@ -1049,7 +1047,6 @@ def get_agent_plugin(*, name: str, organization: str = "") -> AgentPlugin: ...
 
 def search_agent_plugins(
     *,
-    search_text: str | None = None,
     filter_string: str | None = None,
     max_results: int = 100,
     order_by: list[str] | None = None,
@@ -1343,19 +1340,25 @@ character validation as Agent Plugin URIs.
 ### Pagination and filtering
 
 Search endpoints use page-token-based pagination and `filter_string`
-expressions following existing MLflow conventions. Parent search endpoints also
-accept `search_text`, which is combined with `filter_string` using logical AND.
+expressions following existing MLflow conventions. Free-text discovery is also
+expressed through `filter_string`: parent search endpoints expose a derived
+`search_text` field that is matched with `LIKE`/`ILIKE` (e.g.,
+`search_text LIKE '%review%'`). This field concatenates several
+discovery fields into one column so that a single `LIKE` matches across
+all of them without requiring `OR`, which MLflow `filter_string` does not
+support. For skills the projection is derived from name and description; for
+agent plugins it is derived from the fields listed below.
 
-**Skills:** free-text matches name and description. Structured examples include
-`name LIKE '%review%'`, `description LIKE '%security%'`,
+**Skills:** the `search_text` field covers name and description. Structured
+examples include `name LIKE '%review%'`, `description LIKE '%security%'`,
 `organization = 'acme'`, `status = 'active'`, and `tags.team = 'platform'`.
 
-**Agent plugins:** free-text matches name, mutable parent description,
-organization, and the latest-resolved manifest's description, keywords, and
-author name. Structured filters are the same as Skills, plus
+**Agent plugins:** the `search_text` field covers name, mutable parent
+description, organization, and the latest-resolved manifest's description,
+keywords, and author name. Structured filters are the same as Skills, plus
 `member_name = 'code-review'` to find agent plugins that include a given skill.
 If a lifecycle transition changes which version resolves as latest, the
-manifest-derived free-text matches for the parent change accordingly.
+`search_text` matches for the parent change accordingly.
 
 **Versions (all entity types):** `status = 'active'`,
 `organization = 'acme'`, `source_type = 'git'`, and
@@ -1622,8 +1625,9 @@ same operations from the command line. Commands accept `--name` and optional
 `create-version` and `register` accept `--plugin-json PATH` for a full standard
 manifest. When omitted for an assembled plugin, `--version` is required and
 the command synthesizes a minimal manifest from `--name` or `--plugin-uri`
-and the supplied version. Search commands expose `--search-text` separately from
-`--filter`.
+and the supplied version. Search commands accept `--filter-string`, which
+covers both structured filters and free-text matching against the derived
+`search_text` field (e.g., `--filter-string "search_text LIKE '%review%'"`).
 
 **Relationship to existing `mlflow skills` subcommands.** MLflow already
 has `mlflow skills list` and `mlflow skills view` subcommands
@@ -1797,7 +1801,7 @@ handles package inspection and embedded skill creation internally. See the
 
 ```python
 # Free-text discovery across skill names and descriptions
-skills = mlflow.genai.search_skills(search_text="code review")
+skills = mlflow.genai.search_skills(filter_string="search_text LIKE '%code review%'")
 skill = skills[0]
 
 # Search for active versions of that skill
@@ -1809,8 +1813,7 @@ versions = mlflow.genai.search_skill_versions(
 
 # Search for active agent plugins
 plugins = mlflow.genai.search_agent_plugins(
-    search_text="pull request review",
-    filter_string="status = 'active'",
+    filter_string="search_text LIKE '%pull request review%' AND status = 'active'",
 )
 
 # Get a specific version

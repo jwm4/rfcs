@@ -200,10 +200,10 @@ infrastructure; registry-specific trace linkage (SKILL spans,
        --url https://github.com/acme/agent-skills.git \
        --ref v1.0.0 --subpath code-review
    # Explicit: all fields specified
-   mlflow skills register git --skill-uri skills:/code-review \
+   mlflow skills register git --name code-review \
        --url https://github.com/acme/agent-skills.git \
        --ref v1.0.0 --subpath code-review
-   mlflow skills register git --skill-uri skills:/style-check \
+   mlflow skills register git --name style-check \
        --url https://github.com/acme/agent-skills.git \
        --ref v2.0.0 --subpath style-check
    ```
@@ -305,7 +305,7 @@ infrastructure; registry-specific trace linkage (SKILL spans,
 
 1. A new version of the `code-review` skill is registered:
    ```bash
-   mlflow skills register git --skill-uri skills:/code-review \
+   mlflow skills register git --name code-review \
        --url https://github.com/acme/agent-skills.git \
        --ref v2.0.0 --subpath code-review
    ```
@@ -329,7 +329,7 @@ infrastructure; registry-specific trace linkage (SKILL spans,
 
 1. Search the registry by keyword:
    ```bash
-   mlflow skills search --search-text review --filter "status = 'active'"
+   mlflow skills search --filter-string "search_text LIKE '%review%' AND status = 'active'"
    ```
    **UI path:** Navigate to the Skills page, type "review" in the
    search bar to match names and descriptions, and filter by status "active"
@@ -365,7 +365,7 @@ can autonomously explore execution traces via MCP tools.
 1. Register a new skill version and create a draft agent plugin
    version for evaluation:
    ```bash
-   mlflow skills register git --skill-uri skills:/code-review \
+   mlflow skills register git --name code-review \
        --url https://github.com/acme/agent-skills.git \
        --ref v2.0.0 --subpath code-review
    mlflow agent-plugins create-version --plugin-uri agent-plugins:/pr-workflow \
@@ -432,7 +432,7 @@ both against the same inputs and scorers.
 2. The job registers a new skill version and creates a draft agent
    plugin version for evaluation:
    ```bash
-   mlflow skills register git --skill-uri skills:/code-review \
+   mlflow skills register git --name code-review \
        --url https://github.com/acme/agent-skills.git \
        --ref v1.1.0 --subpath code-review
    mlflow agent-plugins create-version --plugin-uri agent-plugins:/pr-workflow \
@@ -999,6 +999,15 @@ Code, and generic plugin import adapters.
   [NVIDIA's skill.oms.sig](https://github.com/NVIDIA/skills/blob/main/skills/cudaq-guide/skill.oms.sig))
   to enable publisher verification and trusted-publisher filtering
   in the registry UI.
+- **Relevance-based search.** Free-text discovery currently relies on
+  boolean substring matching (`search_text LIKE '%...%'`) through
+  `filter_string`, which cannot rank results by relevance. A future
+  capability could add relevance-ranked search (e.g., BM25 or dense
+  vector retrieval) so that the most pertinent skills and agent plugins
+  surface first for realistic queries. Because the same need applies to
+  MCP servers (RFC-0004) and other registered assets, this is better
+  addressed as a cross-registry capability with a shared search model
+  rather than a skill-specific feature.
 
 # Open questions
 
