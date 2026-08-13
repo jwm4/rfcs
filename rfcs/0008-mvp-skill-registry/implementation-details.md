@@ -900,9 +900,19 @@ implementation based on the caller's context.
 
 ## SDK convenience functions
 
-The `mlflow.genai` namespace provides convenience functions that
-combine store operations, matching the top-level public SDK pattern
-established by `mlflow.genai.register_mcp_server()` in RFC-0004.
+The SDK is split into two layers, following the MLflow model and
+prompt registries. The `mlflow.genai` namespace exposes a small set
+of high-level, workflow-oriented functions for the common cases
+(register, import, introspect, pull, search). The full low-level
+create/get/update/delete surface, including version, tag, and alias
+operations, lives on `MlflowClient`; the `mlflow.genai` helpers call
+these methods internally. This keeps the top-level namespace concise
+while still making every operation reachable. The two search
+functions appear in both layers, mirroring
+`mlflow.search_registered_models` and
+`MlflowClient.search_registered_models` in the model registry.
+
+### High-level workflow functions (`mlflow.genai`)
 
 ```python
 from dataclasses import dataclass
@@ -921,8 +931,9 @@ def register_skill(
     monotonic integer version. Auto-creates the parent Skill if
     it does not exist (with null description) and otherwise reuses
     the existing parent. To set parent-level metadata, use
-    create_skill() before registering versions or update_skill()
-    afterward. This matches the MCP Server Registry behavior
+    MlflowClient.create_skill() before registering versions or
+    MlflowClient.update_skill() afterward. This matches the MCP
+    Server Registry behavior
     (register_mcp_server). If name is omitted, the name is
     extracted from the skill's SKILL.md entry point (server-side
     for remote sources, client-side for local paths). The server
@@ -934,17 +945,6 @@ def register_skill(
     the files through existing MLflow artifact APIs."""
 
 
-def create_skill(
-    *,
-    name: str,
-    organization: str = "",
-    description: str | None = None,
-) -> Skill: ...
-
-
-def get_skill(*, name: str, organization: str = "") -> Skill: ...
-
-
 def search_skills(
     *,
     filter_string: str | None = None,
@@ -952,79 +952,6 @@ def search_skills(
     order_by: list[str] | None = None,
     page_token: str | None = None,
 ) -> PagedList[Skill]: ...
-
-
-def update_skill(
-    *,
-    name: str,
-    organization: str = "",
-    description: str | None = NOT_SET,
-) -> Skill: ...
-
-
-def delete_skill(*, name: str, organization: str = "") -> None: ...
-
-
-def create_skill_version(
-    *,
-    name: str,
-    organization: str = "",
-    source: GitSource | OCISource | ZipSource | str | None = None,
-) -> SkillVersion: ...
-
-
-def get_skill_version(*, name: str, version: int, organization: str = "") -> SkillVersion: ...
-
-
-def get_skill_version_by_alias(*, name: str, alias: str, organization: str = "") -> SkillVersion: ...
-
-
-def get_latest_skill_version(*, name: str, organization: str = "") -> SkillVersion: ...
-
-
-def search_skill_versions(
-    *,
-    name: str,
-    organization: str = "",
-    filter_string: str | None = None,
-    max_results: int = 100,
-    order_by: list[str] | None = None,
-    page_token: str | None = None,
-) -> PagedList[SkillVersion]: ...
-
-
-def update_skill_version(
-    *,
-    name: str,
-    version: int,
-    organization: str = "",
-    status: str | None = NOT_SET,
-) -> SkillVersion: ...
-
-
-def delete_skill_version(*, name: str, version: int, organization: str = "") -> None: ...
-
-
-def create_agent_plugin(
-    *,
-    name: str,
-    organization: str = "",
-    description: str | None = None,
-) -> AgentPlugin: ...
-
-
-def create_agent_plugin_version(
-    *,
-    name: str,
-    organization: str = "",
-    version: str | None = None,
-    plugin_json: dict[str, Any] | None = None,
-    skills: list[str] | None = None,
-    source: GitSource | OCISource | ZipSource | str | None = None,
-    status: str = "active",
-) -> AgentPluginVersion:
-    """version is required when plugin_json is None or when
-    plugin_json does not contain a version field."""
 
 
 def register_agent_plugin(
@@ -1042,9 +969,6 @@ def register_agent_plugin(
     required when plugin_json is None or does not contain a version."""
 
 
-def get_agent_plugin(*, name: str, organization: str = "") -> AgentPlugin: ...
-
-
 def search_agent_plugins(
     *,
     filter_string: str | None = None,
@@ -1052,78 +976,6 @@ def search_agent_plugins(
     order_by: list[str] | None = None,
     page_token: str | None = None,
 ) -> PagedList[AgentPlugin]: ...
-
-
-def update_agent_plugin(
-    *,
-    name: str,
-    organization: str = "",
-    description: str | None = NOT_SET,
-) -> AgentPlugin: ...
-
-
-def delete_agent_plugin(*, name: str, organization: str = "") -> None: ...
-
-
-def get_agent_plugin_version(
-    *, name: str, version: str, organization: str = "",
-) -> AgentPluginVersion: ...
-
-
-def get_agent_plugin_version_by_alias(
-    *, name: str, alias: str, organization: str = "",
-) -> AgentPluginVersion: ...
-
-
-def get_latest_agent_plugin_version(*, name: str, organization: str = "") -> AgentPluginVersion: ...
-
-
-def search_agent_plugin_versions(
-    *,
-    name: str,
-    organization: str = "",
-    filter_string: str | None = None,
-    max_results: int = 100,
-    order_by: list[str] | None = None,
-    page_token: str | None = None,
-) -> PagedList[AgentPluginVersion]: ...
-
-
-def update_agent_plugin_version(
-    *,
-    name: str,
-    version: str,
-    organization: str = "",
-    status: str | None = NOT_SET,
-) -> AgentPluginVersion: ...
-
-
-def delete_agent_plugin_version(*, name: str, version: str, organization: str = "") -> None: ...
-
-
-def set_skill_tag(*, name: str, key: str, value: str, organization: str = "") -> None: ...
-
-def delete_skill_tag(*, name: str, key: str, organization: str = "") -> None: ...
-
-def set_skill_version_tag(*, name: str, version: int, key: str, value: str, organization: str = "") -> None: ...
-
-def delete_skill_version_tag(*, name: str, version: int, key: str, organization: str = "") -> None: ...
-
-def set_skill_alias(*, name: str, alias: str, version: int, organization: str = "") -> None: ...
-
-def delete_skill_alias(*, name: str, alias: str, organization: str = "") -> None: ...
-
-def set_agent_plugin_tag(*, name: str, key: str, value: str, organization: str = "") -> None: ...
-
-def delete_agent_plugin_tag(*, name: str, key: str, organization: str = "") -> None: ...
-
-def set_agent_plugin_version_tag(*, name: str, version: str, key: str, value: str, organization: str = "") -> None: ...
-
-def delete_agent_plugin_version_tag(*, name: str, version: str, key: str, organization: str = "") -> None: ...
-
-def set_agent_plugin_alias(*, name: str, alias: str, version: str, organization: str = "") -> None: ...
-
-def delete_agent_plugin_alias(*, name: str, alias: str, organization: str = "") -> None: ...
 
 
 @dataclass(frozen=True)
@@ -1205,6 +1057,170 @@ version = mlflow.genai.register_skill(
 )
 # version.name and version.organization identify the skill for subsequent operations
 skills = mlflow.genai.search_skills(filter_string="status = 'active'")
+```
+
+### Low-level CRUD (`MlflowClient` methods)
+
+The full create/get/update/delete surface, including version, tag,
+and alias operations, is exposed as `MlflowClient` methods. The
+`mlflow.genai` helpers above call these internally. `search_skills`
+and `search_agent_plugins` appear in both layers, mirroring
+`search_registered_models` in the model registry.
+
+```python
+class MlflowClient:
+    # --- Skills ---
+    def create_skill(
+        self, *, name: str, organization: str = "", description: str | None = None
+    ) -> Skill: ...
+
+    def get_skill(self, *, name: str, organization: str = "") -> Skill: ...
+
+    def search_skills(
+        self,
+        *,
+        filter_string: str | None = None,
+        max_results: int = 100,
+        order_by: list[str] | None = None,
+        page_token: str | None = None,
+    ) -> PagedList[Skill]: ...
+
+    def update_skill(
+        self, *, name: str, organization: str = "", description: str | None = NOT_SET
+    ) -> Skill: ...
+
+    def delete_skill(self, *, name: str, organization: str = "") -> None: ...
+
+    def create_skill_version(
+        self,
+        *,
+        name: str,
+        organization: str = "",
+        source: GitSource | OCISource | ZipSource | str | None = None,
+    ) -> SkillVersion: ...
+
+    def get_skill_version(
+        self, *, name: str, version: int, organization: str = ""
+    ) -> SkillVersion: ...
+
+    def get_skill_version_by_alias(
+        self, *, name: str, alias: str, organization: str = ""
+    ) -> SkillVersion: ...
+
+    def get_latest_skill_version(
+        self, *, name: str, organization: str = ""
+    ) -> SkillVersion: ...
+
+    def search_skill_versions(
+        self,
+        *,
+        name: str,
+        organization: str = "",
+        filter_string: str | None = None,
+        max_results: int = 100,
+        order_by: list[str] | None = None,
+        page_token: str | None = None,
+    ) -> PagedList[SkillVersion]: ...
+
+    def update_skill_version(
+        self, *, name: str, version: int, organization: str = "", status: str | None = NOT_SET
+    ) -> SkillVersion: ...
+
+    def delete_skill_version(
+        self, *, name: str, version: int, organization: str = ""
+    ) -> None: ...
+
+    # --- Agent plugins ---
+    def create_agent_plugin(
+        self, *, name: str, organization: str = "", description: str | None = None
+    ) -> AgentPlugin: ...
+
+    def create_agent_plugin_version(
+        self,
+        *,
+        name: str,
+        organization: str = "",
+        version: str | None = None,
+        plugin_json: dict[str, Any] | None = None,
+        skills: list[str] | None = None,
+        source: GitSource | OCISource | ZipSource | str | None = None,
+        status: str = "active",
+    ) -> AgentPluginVersion:
+        """version is required when plugin_json is None or when
+        plugin_json does not contain a version field."""
+
+    def get_agent_plugin(self, *, name: str, organization: str = "") -> AgentPlugin: ...
+
+    def search_agent_plugins(
+        self,
+        *,
+        filter_string: str | None = None,
+        max_results: int = 100,
+        order_by: list[str] | None = None,
+        page_token: str | None = None,
+    ) -> PagedList[AgentPlugin]: ...
+
+    def update_agent_plugin(
+        self, *, name: str, organization: str = "", description: str | None = NOT_SET
+    ) -> AgentPlugin: ...
+
+    def delete_agent_plugin(self, *, name: str, organization: str = "") -> None: ...
+
+    def get_agent_plugin_version(
+        self, *, name: str, version: str, organization: str = ""
+    ) -> AgentPluginVersion: ...
+
+    def get_agent_plugin_version_by_alias(
+        self, *, name: str, alias: str, organization: str = ""
+    ) -> AgentPluginVersion: ...
+
+    def get_latest_agent_plugin_version(
+        self, *, name: str, organization: str = ""
+    ) -> AgentPluginVersion: ...
+
+    def search_agent_plugin_versions(
+        self,
+        *,
+        name: str,
+        organization: str = "",
+        filter_string: str | None = None,
+        max_results: int = 100,
+        order_by: list[str] | None = None,
+        page_token: str | None = None,
+    ) -> PagedList[AgentPluginVersion]: ...
+
+    def update_agent_plugin_version(
+        self, *, name: str, version: str, organization: str = "", status: str | None = NOT_SET
+    ) -> AgentPluginVersion: ...
+
+    def delete_agent_plugin_version(
+        self, *, name: str, version: str, organization: str = ""
+    ) -> None: ...
+
+    # --- Tags and aliases ---
+    def set_skill_tag(self, *, name: str, key: str, value: str, organization: str = "") -> None: ...
+
+    def delete_skill_tag(self, *, name: str, key: str, organization: str = "") -> None: ...
+
+    def set_skill_version_tag(self, *, name: str, version: int, key: str, value: str, organization: str = "") -> None: ...
+
+    def delete_skill_version_tag(self, *, name: str, version: int, key: str, organization: str = "") -> None: ...
+
+    def set_skill_alias(self, *, name: str, alias: str, version: int, organization: str = "") -> None: ...
+
+    def delete_skill_alias(self, *, name: str, alias: str, organization: str = "") -> None: ...
+
+    def set_agent_plugin_tag(self, *, name: str, key: str, value: str, organization: str = "") -> None: ...
+
+    def delete_agent_plugin_tag(self, *, name: str, key: str, organization: str = "") -> None: ...
+
+    def set_agent_plugin_version_tag(self, *, name: str, version: str, key: str, value: str, organization: str = "") -> None: ...
+
+    def delete_agent_plugin_version_tag(self, *, name: str, version: str, key: str, organization: str = "") -> None: ...
+
+    def set_agent_plugin_alias(self, *, name: str, alias: str, version: str, organization: str = "") -> None: ...
+
+    def delete_agent_plugin_alias(self, *, name: str, alias: str, organization: str = "") -> None: ...
 ```
 
 For SDK update methods, `NOT_SET` means "leave unchanged" while `None`
@@ -1587,12 +1603,15 @@ MLflow applies the same organization constraints around that standard name.
 
 ## Python SDK and CLI
 
-The `mlflow.genai` module exposes the public registry functions,
-delegating to `MlflowClient`, plus client-side import and pull
-operations that compose those registry functions. Skill-specific
-entity and request types are also re-exported from `mlflow.genai`.
-The `mlflow skills` and `mlflow agent-plugins` CLI command groups provide the
-same operations from the command line. Commands accept `--name` and optional
+The `mlflow.genai` module exposes the high-level workflow functions
+(register, search, import, introspect, pull); the full create/get/
+update/delete surface, including version, tag, and alias operations,
+is available as `MlflowClient` methods, which the `mlflow.genai`
+helpers call internally. Skill-specific entity and request types are
+also re-exported from `mlflow.genai`. The `mlflow skills` and
+`mlflow agent-plugins` CLI command groups provide the same operations
+from the command line, mapping to whichever layer defines each
+function (the SDK function column below). Commands accept `--name` and optional
 `--organization` flags for entity identification. Skill commands also accept
 `--skill-uri`, while agent plugin commands accept `--plugin-uri`:
 
@@ -1800,24 +1819,28 @@ handles package inspection and embedded skill creation internally. See the
 ### Discover and consume skills
 
 ```python
-# Free-text discovery across skill names and descriptions
+from mlflow import MlflowClient
+
+client = MlflowClient()
+
+# Free-text discovery across skill names and descriptions (high-level API)
 skills = mlflow.genai.search_skills(filter_string="search_text LIKE '%code review%'")
 skill = skills[0]
 
-# Search for active versions of that skill
-versions = mlflow.genai.search_skill_versions(
+# Search for active versions of that skill (low-level CRUD on MlflowClient)
+versions = client.search_skill_versions(
     name=skill.name,
     organization=skill.organization,
     filter_string="status = 'active'",
 )
 
-# Search for active agent plugins
+# Search for active agent plugins (high-level API)
 plugins = mlflow.genai.search_agent_plugins(
     filter_string="search_text LIKE '%pull request review%' AND status = 'active'",
 )
 
 # Get a specific version
-version = mlflow.genai.get_skill_version(
+version = client.get_skill_version(
     name=skill.name,
     organization=skill.organization,
     version=1,
@@ -1828,7 +1851,7 @@ version = mlflow.genai.get_skill_version(
 # version.source.subpath == "code-review"
 
 # Resolve by alias
-version = mlflow.genai.get_skill_version_by_alias(
+version = client.get_skill_version_by_alias(
     name=skill.name,
     organization=skill.organization,
     alias="production",
@@ -1838,7 +1861,7 @@ version = mlflow.genai.get_skill_version_by_alias(
 plugin = mlflow.genai.search_agent_plugins(
     filter_string="name = 'pr-workflow'",
 )[0]
-plugin_version = mlflow.genai.get_agent_plugin_version(
+plugin_version = client.get_agent_plugin_version(
     name=plugin.name,
     organization=plugin.organization,
     version="0.1.0",
@@ -1846,7 +1869,7 @@ plugin_version = mlflow.genai.get_agent_plugin_version(
 # plugin_version.skills == ["skills:/code-review/1", ...]
 
 # Resolve an agent plugin alias
-plugin_version = mlflow.genai.get_agent_plugin_version_by_alias(
+plugin_version = client.get_agent_plugin_version_by_alias(
     name=plugin.name,
     organization=plugin.organization,
     alias="production",
