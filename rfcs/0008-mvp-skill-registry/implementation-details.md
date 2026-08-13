@@ -1298,6 +1298,19 @@ All paths relative to the logical skills router prefix.
 When `organization` is empty, the path segment uses the literal
 value `_` as a placeholder (e.g., `/_/code-review/versions/1`).
 
+This intentionally differs from the URI format, which omits the empty
+organization entirely rather than using a placeholder. The two schemes
+disambiguate differently. URIs rely on the trailing segment (an integer for
+skills, a SemVer string for agent plugins) to tell `name/version` apart from
+`organization/name`, so no placeholder is needed. REST paths cannot use that
+trick because they have fixed keyword subresource segments (`versions`, `tags`,
+`aliases`) after the name. Omitting the placeholder would make paths like
+`/acme/versions` ambiguous between `(organization=acme, name=versions)` and
+`(empty organization, name=acme, versions collection)`. The `_` placeholder
+keeps the empty-organization case unambiguous (always `/_/name/...`) without
+reserving subresource keywords as forbidden names. The artifact storage paths
+use `_` for the same reason.
+
 Similarly, agent plugin endpoints are exposed under both
 `/api/3.0/mlflow/agent-plugins` and
 `/ajax-api/3.0/mlflow/agent-plugins`.

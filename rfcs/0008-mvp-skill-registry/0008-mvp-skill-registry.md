@@ -581,10 +581,13 @@ parent presentation fields are unset, the UI may fall back to the latest
 resolved manifest metadata; the API returns parent fields as stored.
 
 Agent plugins use a dedicated URI namespace. A parent is addressed as
-`agent-plugins:/<organization-or-_>/<name>`, an exact version appends
-`/<version>`, and an alias appends `@<alias>` to the parent URI. The `_`
-segment represents an empty organization. Unlike skill URIs, this fixed
-identity shape remains unambiguous when versions are arbitrary strings.
+`agent-plugins:/<name>`, or `agent-plugins:/<organization>/<name>` when an
+organization is present; an exact version appends `/<version>` and an alias
+appends `@<alias>` to the parent URI. When the organization is empty it is
+omitted rather than represented by a placeholder segment. Because every agent
+plugin version is valid SemVer, the parser disambiguates `<name>/<version>`
+from `<organization>/<name>` by checking whether the last segment parses as
+SemVer.
 
 Follow-up work currently tracked as
 [RFC-0009: Extended Skill Bundles](https://github.com/mlflow/rfcs/pull/27)
