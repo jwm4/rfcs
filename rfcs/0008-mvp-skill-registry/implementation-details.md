@@ -447,8 +447,6 @@ convention:
 
 - `skills:/name/version` pins a specific version
 - `skills:/name@alias` resolves through an alias
-- `skills:/name/version#subpath` identifies an embedded skill inside
-  a monolithic agent plugin artifact (subpath relative to the agent plugin root)
 
 ```python
 @dataclass
@@ -513,19 +511,19 @@ existing versions of the same agent plugin.
   `OCISource`) pointing to a single artifact that contains the
   complete agent plugin. `pull` fetches the agent plugin as a unit.
   Member skill versions may omit their own `source` because the
-  agent plugin is the authoritative source. Every source-less member
-  must include a `#subpath` fragment in its URI identifying where it
-  lives inside the agent plugin (e.g., `skills:/name/1#skills/name`).
+  agent plugin is the authoritative source. Source-less members are
+  referenced by name and are not individually addressable within the
+  package.
 - **Assembled:** has individual member references. Each skill member
   has its own source. `pull` fetches members individually. If a skill
   member has no source, `pull` fails rather than producing a partial
-  local agent plugin. For assembled agent plugins, member URIs must
-  not include a `#subpath` fragment because the member's own source
-  identifies its content.
+  local agent plugin.
 
-The API rejects a member URI with a `#subpath` fragment when the
-member version has its own source. It also rejects a source-less member
-of a monolithic agent plugin when the URI lacks a `#subpath` fragment.
+A source-less member is valid only in a monolithic agent plugin, whose
+own source is authoritative for the member's content. In an assembled
+agent plugin, every member must have its own source. The API rejects a
+source-less member of an assembled agent plugin and a sourced member of
+a monolithic one.
 
 **Immutability contract.** `plugin_json`, the member list, and source fields of
 an agent plugin version are immutable after creation. To change the canonical
@@ -556,7 +554,6 @@ and `alias` parameters for primary resource identification.
 | `skills:/org/name` | Skill with organization | `skills:/acme/code-review` |
 | `skills:/org/name/version` | Pin version with organization | `skills:/acme/code-review/1` |
 | `skills:/org/name@alias` | Alias with organization | `skills:/acme/code-review@production` |
-| `skills:/name/version#subpath` | Embedded skill in monolithic agent plugin | `skills:/review/1#skills/review` |
 
 **URI disambiguation.** When three path segments are present (e.g.,
 `skills:/a/b/1`), the first is the organization, the second is the
@@ -587,8 +584,7 @@ accept `--plugin-uri`.
 In agent plugin member lists, URIs appear as plain strings in `list[str]`.
 The server parses the URI into its constituent fields
 (`member_organization`, `member_name`, `member_version`)
-for storage and validation. The `#subpath` fragment is retained in
-the URI string but not stored as a separate column. Alias URIs are
+for storage and validation. Alias URIs are
 resolved to a concrete version at the time of the API call.
 
 ## Store interface
@@ -1681,9 +1677,8 @@ the user must supply one via `--version` or the `version` parameter.
 
 For each discovered skill, the importer creates a `SkillVersion` whose
 version is server-assigned and whose `source` is `None` (no typed source
-class, no `ref`). The importer records the skill's plugin-relative
-directory as the `#subpath` fragment in the member URI (e.g.,
-`skills:/embedded-review/1#skills/embedded-review`).
+class, no `ref`). The importer references each embedded skill by name in
+the member list (e.g., `skills:/embedded-review/1`).
 
 After registering the embedded skills, the importer creates one
 monolithic `AgentPluginVersion` with the original typed source
@@ -1697,19 +1692,20 @@ member list.
 
 When the target agent plugin already has at least one version, import first
 rejects an incoming canonical version that already exists. It then
-matches discovered skills to existing members using the `#subpath`
-fragment from the most recently created agent plugin version's member list:
+matches discovered skills to existing members by name, using the
+member skill names from the most recently created agent plugin version's member list:
 
-1. **Matching subpath:** The discovered skill's plugin-relative
-   directory matches a `#subpath` in the previous member list. Import
-   creates a new version of that existing skill (identified by the
-   member reference in the previous agent plugin version, not by name
-   lookup).
-2. **New subpath:** The directory does not match any previous member.
+1. **Matching name:** The discovered skill's name matches a member name
+   in the previous member list. Import
+   creates a new version of that existing skill.
+2. **New name:** The name does not match any previous member.
    Import creates a new skill with its own next server-assigned integer version.
-3. **Removed subpath:** A previous member's subpath is not found in the
+3. **Removed name:** A previous member's name is not found in the
    new source. The member is omitted from the new agent plugin version.
    The skill and its existing versions remain in the registry.
+
+A skill that is renamed between versions is treated as a removed skill
+and a new one.
 
 After processing all discovered skills, import creates a new
 `AgentPluginVersion` with updated member references. Previous agent

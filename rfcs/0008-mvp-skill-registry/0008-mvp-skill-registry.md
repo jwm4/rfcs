@@ -268,8 +268,8 @@ infrastructure; registry-specific trace linkage (SKILL spans,
    version. When the manifest does not include a version, the user must supply
    one explicitly (e.g., `--version` on the CLI).
 4. MLflow registers each discovered skill as an embedded, source-less
-   skill version and records its path as the `#subpath` fragment
-   in the member URI of a new monolithic agent plugin version. The agent plugin
+   skill version and references it by name in the member list of a new
+   monolithic agent plugin version. The agent plugin
    retains the original source pointer.
 5. Root `mcp.json` is reported as recognized standard content that is preserved
    but not individually registered. Other non-skill content is also retained in
@@ -292,11 +292,11 @@ infrastructure; registry-specific trace linkage (SKILL spans,
    `--version`) and rejects the import if that agent plugin version
    already exists. It looks up
    the most recently created prior version of the `pr-workflow` agent
-   plugin and compares discovered skill directories against the
-   `#subpath` fragments in its member list.
-3. Skills whose subpaths match existing members get new versions of
-   those skills. New subpaths become new skills. Members whose
-   subpaths are no longer in the source are omitted from the new
+   plugin and compares discovered skill names against the
+   member skill names in its member list.
+3. Skills whose names match existing members get new versions of
+   those skills. New names become new skills. Members whose
+   names are no longer in the source are omitted from the new
    agent plugin version.
 4. A new agent plugin version is created with the updated member
    references. Previous versions remain unchanged.
@@ -520,10 +520,9 @@ AgentPluginVersionMember {
 ```
 
 The `AgentPluginVersionMember` fields are storage columns parsed
-from the member URI string (e.g., `skills:/acme/code-review/1#path`
+from the member URI string (e.g., `skills:/acme/code-review/1`
 decomposes into `member_organization`, `member_name`,
-and `member_version`). The `#subpath` fragment is retained in the
-URI string but not stored as a separate column.
+and `member_version`).
 
 #### Skill
 
@@ -618,9 +617,8 @@ agent plugin version therefore has a complete `plugin_json`.
 
 Skill members are referenced by URI string following the
 `models:/name/version` convention:
-`skills:/name` (name only), `skills:/name/version` (pinned version),
-`skills:/name@alias` (alias resolution), or
-`skills:/name/version#subpath` (embedded skills in monolithic agent plugins).
+`skills:/name` (name only), `skills:/name/version` (pinned version), or
+`skills:/name@alias` (alias resolution).
 An agent plugin version is one of two kinds:
 
 - **Assembled:** captures member references for individual skills.
@@ -629,10 +627,9 @@ An agent plugin version is one of two kinds:
 - **Monolithic:** has its own source pointer (e.g., a single OCI
   image or Git repo containing a complete Agent Plugins package) and member
   references. Skill member versions may omit their own sources when
-  their content lives inside the agent plugin. A source-less member
-  must include a `#subpath` fragment in its member URI to identify
-  where it lives inside the agent plugin. `pull` fetches the agent
-  plugin as a unit.
+  their content lives inside the agent plugin; these embedded members
+  are referenced by name and are not individually addressable within
+  the package. `pull` fetches the agent plugin as a unit.
 
 An agent plugin version cannot have both an agent plugin-level source
 and skill member versions with their own sources. This avoids
@@ -811,7 +808,7 @@ Otherwise the user must supply a version explicitly (e.g., `--version` on
 the CLI). MLflow inserts the supplied version into the stored payload.
 
 The client creates embedded skill versions without individual source pointers
-and records each directory as the `#subpath` fragment in the member URI. It then
+and references each by name in the member list. It then
 creates a monolithic agent plugin version whose source fields preserve the
 original package location. The complete `plugin_json` is immutable after
 creation; importing an existing `(workspace, organization, name, version)`
@@ -827,15 +824,15 @@ into another agent plugin format.
 
 When importing a source into an agent plugin that already has previous
 versions, import matches discovered skills to existing members by
-comparing each skill's plugin-relative directory path against the
-`#subpath` fragments in the most recently created agent plugin version's member
-list. A matching subpath creates a new version of the existing skill.
-A new subpath (not in the previous version) creates a new skill
+comparing each discovered skill's name against the member skill names
+in the most recently created agent plugin version's member
+list. A matching name creates a new version of the existing skill.
+A new name (not in the previous version) creates a new skill
 with its own next server-assigned integer version. A previous
-member whose subpath no longer appears in the source is omitted from
-the new agent plugin version but remains in the registry.
-This allows re-importing an updated plugin without requiring name-based
-matching or content diffing.
+member whose name no longer appears in the source is omitted from
+the new agent plugin version but remains in the registry. A skill that
+is renamed between versions is treated as a removed skill and a new one.
+This allows re-importing an updated plugin without content diffing.
 
 See [implementation-details.md: Plugin
 import](implementation-details.md#plugin-import) for the SDK return
