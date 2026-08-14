@@ -1651,27 +1651,40 @@ invalid required fields are fatal. `plugin_json["name"]` must match an explicit 
 manifest does not include a version, the request must supply one. When both
 are present, they must agree.
 
-**Name and organization validation.** The server rejects `organization` and
-skill `name` values that would create ambiguity in URIs, REST paths, or artifact
-storage paths:
+**Name and organization validation.** Skill and agent plugin identifiers
+become segments of URIs, REST paths, and artifact storage paths, so the
+server validates them on create and rejects any value that could introduce
+path ambiguity or escape its controlled storage prefix:
 
-- Neither field may contain `/`, `@`, `#`, or `?` (URI-significant
-  characters). The leading `@` that marks an organization segment is
-  therefore never part of an organization or name value itself.
+- **Skill `name`:** 1 to 64 characters; lowercase ASCII letters (`a-z`),
+  digits (`0-9`), and hyphens only; must not begin or end with a hyphen;
+  and no consecutive hyphens. This matches the
+  [Agent Skills naming rules](https://agentskills.io/specification), so no
+  otherwise-valid skill name is rejected.
+- **Agent plugin `name`:** the canonical Agent Plugins constraints: 1 to 64
+  characters; lowercase ASCII letters, digits, hyphens, and periods;
+  alphanumeric first and last characters; and no consecutive hyphens or
+  periods. Agent plugin names that parse as valid SemVer are permitted,
+  since the `@` marker distinguishes an organization from a `name/version`
+  sequence without relying on SemVer recognition.
+- **`organization`** (both entity types): empty (the default), or the same
+  rule as an agent plugin name, which also allows periods so domain-style
+  publisher names such as `acme.io` are valid: 1 to 64 characters; lowercase
+  ASCII letters, digits, hyphens, and periods; alphanumeric first and last
+  characters; and no consecutive hyphens or periods.
 
+These rules exclude path-significant values by construction: `/`, `\`, `@`,
+`#`, `?`, whitespace, control characters, percent-encoded separators, and
+dot-segments such as `.` and `..` cannot appear in any identifier, and the
+leading `@` that marks an organization segment is never part of a value.
 Because an organization is always marked by a leading `@` in URIs and REST
 paths, the parser never has to guess whether a segment is an organization or
-a name. Numeric skill names (e.g., `123`) are therefore permitted, since
-there is no longer any `name/version` versus `organization/name` ambiguity
-to resolve by integer parsing.
+a name; numeric skill names (e.g., `123`) are therefore permitted.
 
-Agent plugin names instead follow the canonical Agent Plugins constraints:
-1–64 lowercase ASCII letters, digits, hyphens, and periods; alphanumeric first
-and last characters; and no consecutive hyphens or periods. Agent plugin names
-that parse as valid SemVer are likewise permitted, since the `@` marker
-distinguishes an organization from a `name/version` sequence without relying
-on SemVer recognition. MLflow applies the same organization constraints around
-that standard name.
+As defense in depth, artifact operations build storage paths only from
+validated segments (organization, name, and version) and verify that the
+resolved path stays within the controlled prefix (`skills/...` or
+`agent-plugins/...`), rejecting any operation that would resolve outside it.
 
 ## Python SDK and CLI
 

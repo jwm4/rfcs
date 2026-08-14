@@ -850,11 +850,11 @@ type, CLI mapping, discovery rules, and conflict behavior.
 
 ### Pull semantics
 
-`pull` is a client-side operation. The SDK reads the source pointer
-from the registry via the REST API, then fetches content directly
-from the source system to the caller's local filesystem. The registry
-server is not involved in content transfer. `pull` is
-source-type-aware:
+`pull` is a client-side operation. The SDK reads the version metadata
+from the registry via the REST API, including its `source_type` and any
+source pointer when present, then fetches content directly from the
+source system to the caller's local filesystem. The registry server is
+not involved in content transfer. `pull` is source-type-aware:
 
 | `source_type` | Pull behavior |
 |---|---|
