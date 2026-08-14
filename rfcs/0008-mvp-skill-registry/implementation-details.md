@@ -364,18 +364,18 @@ Content is stored as a directory tree of individual files under a
 controlled artifact path derived from the skill's identity and
 version. Workspace scoping is handled at the artifact store level
 (each workspace has its own artifact root), so the path within the
-store is `skills/<organization>/<name>/<version>/`. When
-organization is empty, the path uses `_` as a placeholder (e.g.,
-`skills/_/<name>/<version>/`). This is consistent with how MLflow
-stores model artifacts. The `source` field is null for
+store is `skills/@<organization>/<name>/<version>/` when the skill has
+an organization and `skills/<name>/<version>/` when it does not; the
+`@<organization>` segment is omitted entirely, along with its slash, when
+the organization is empty. The `source` field is null for
 MLflow-stored content; the system knows where to find it by
 convention. Pull downloads the directory tree from the artifact
 store. The MLflow UI can browse individual files within a stored
 skill version when artifact proxying is enabled.
 
 The same artifact path convention applies to agent plugins stored
-with `source_type="mlflow"`: `agent-plugins/<organization>/<name>/<version>/`,
-with `_` for empty organization.
+with `source_type="mlflow"`: `agent-plugins/@<organization>/<name>/<version>/`,
+with the `@<organization>` segment omitted when there is no organization.
 
 **Client-side upload flow.** When `source` is a local path (detected
 by the absence of a `://` scheme), the SDK uploads the content to
@@ -388,8 +388,8 @@ MLflow artifact storage rather than treating it as a remote pointer:
    `source_type="mlflow"` from the null source.
 3. Using the returned version number, the client uploads each file
    through MLflow's existing artifact APIs to the controlled artifact
-   prefix (`skills/<organization>/<name>/<version>/`, with `_` for
-   empty organization).
+   prefix (`skills/@<organization>/<name>/<version>/`, with the
+   `@<organization>` segment omitted when there is no organization).
 
 Version creation and upload are not atomic. If upload fails after the
 version record is created, the version exists with no content. The
@@ -552,30 +552,32 @@ and `alias` parameters for primary resource identification.
 | `skills:/name` | Skill with no organization | `skills:/code-review` |
 | `skills:/name/version` | Pin a specific version | `skills:/code-review/1` |
 | `skills:/name@alias` | Resolve through an alias | `skills:/code-review@production` |
-| `skills:/org/name` | Skill with organization | `skills:/acme/code-review` |
-| `skills:/org/name/version` | Pin version with organization | `skills:/acme/code-review/1` |
-| `skills:/org/name@alias` | Alias with organization | `skills:/acme/code-review@production` |
+| `skills:/@org/name` | Skill with organization | `skills:/@acme/code-review` |
+| `skills:/@org/name/version` | Pin version with organization | `skills:/@acme/code-review/1` |
+| `skills:/@org/name@alias` | Alias with organization | `skills:/@acme/code-review@production` |
 
-**URI disambiguation.** When three path segments are present (e.g.,
-`skills:/a/b/1`), the first is the organization, the second is the
-name, and the third (an integer) is the version. When two segments
-are present, the second is either a version (if it parses as an
-integer) or the URI is `organization/name` (if it does not). When
-one segment is present, it is the name with no organization.
+**URI disambiguation.** An organization is always marked by a leading
+`@` on the first segment (e.g., `skills:/@acme/...`), and names cannot
+begin with `@`, so the organization is unambiguous whether or not it is
+present. After the optional `@organization` segment, the segments are the
+name followed by an optional version, and a trailing `@alias` selects an
+alias instead of a version. For example, `skills:/code-review/1` is name
+`code-review` at version `1`, and `skills:/@acme/code-review/1` is that
+version within organization `acme`.
 
 Agent plugins use a separate URI scheme because their versions are
-strings. When organization is empty it is omitted; since all versions
-are valid SemVer, the parser can distinguish `name/version` from
-`org/name` by checking whether the last segment is a SemVer string:
+SemVer strings rather than integers. Organization uses the same leading
+`@` marker and is omitted when empty, so the parser identifies the
+organization by the `@` marker rather than by inspecting the version:
 
 | Pattern | Meaning | Example |
 |---------|---------|---------|
 | `agent-plugins:/name` | Agent plugin parent (no org) | `agent-plugins:/pr-workflow` |
-| `agent-plugins:/org/name` | Agent plugin parent (with org) | `agent-plugins:/acme/pr-workflow` |
+| `agent-plugins:/@org/name` | Agent plugin parent (with org) | `agent-plugins:/@acme/pr-workflow` |
 | `agent-plugins:/name/version` | Exact version (no org) | `agent-plugins:/pr-workflow/1.0.0-beta.11` |
-| `agent-plugins:/org/name/version` | Exact version (with org) | `agent-plugins:/acme/pr-workflow/1.0.0` |
+| `agent-plugins:/@org/name/version` | Exact version (with org) | `agent-plugins:/@acme/pr-workflow/1.0.0` |
 | `agent-plugins:/name@alias` | Resolve through an alias | `agent-plugins:/pr-workflow@production` |
-| `agent-plugins:/org/name@alias` | Resolve through an alias (with org) | `agent-plugins:/acme/pr-workflow@production` |
+| `agent-plugins:/@org/name@alias` | Resolve through an alias (with org) | `agent-plugins:/@acme/pr-workflow@production` |
 
 Agent plugin versions in URIs must be nonempty, valid SemVer, fit within the
 database field, and cannot contain `/`, `@`, `#`, or `?`.
@@ -1294,37 +1296,57 @@ All paths relative to the logical skills router prefix.
 | `POST` | `/` | Create a skill |
 | `GET` | `/` | Search skills |
 | `POST` | `/register` | Register a skill version (name optional; server infers from source when omitted, auto-creates parent) |
-| `GET` | `/{organization}/{name}` | Get skill by organization and name |
-| `PATCH` | `/{organization}/{name}` | Update skill fields |
-| `DELETE` | `/{organization}/{name}` | Hard-delete skill (cascades, subject to references) |
-| `POST` | `/{organization}/{name}/versions` | Create a skill version |
-| `GET` | `/{organization}/{name}/versions` | Search versions |
-| `GET` | `/{organization}/{name}/versions/{version}` | Get a specific version |
-| `PATCH` | `/{organization}/{name}/versions/{version}` | Update version |
-| `DELETE` | `/{organization}/{name}/versions/{version}` | Soft-delete a version (`status='deleted'`) |
-| `POST` | `/{organization}/{name}/tags` | Set a skill-level tag |
-| `DELETE` | `/{organization}/{name}/tags/{key}` | Delete a skill-level tag |
-| `POST` | `/{organization}/{name}/versions/{version}/tags` | Set a version-level tag |
-| `DELETE` | `/{organization}/{name}/versions/{version}/tags/{key}` | Delete a version tag |
-| `POST` | `/{organization}/{name}/aliases` | Set an alias |
-| `GET` | `/{organization}/{name}/aliases/{alias}` | Resolve alias to `SkillVersion` |
-| `DELETE` | `/{organization}/{name}/aliases/{alias}` | Delete an alias |
+| `GET` | `/@{organization}/{name}` | Get skill by organization and name |
+| `PATCH` | `/@{organization}/{name}` | Update skill fields |
+| `DELETE` | `/@{organization}/{name}` | Hard-delete skill (cascades, subject to references) |
+| `POST` | `/@{organization}/{name}/versions` | Create a skill version |
+| `GET` | `/@{organization}/{name}/versions` | Search versions |
+| `GET` | `/@{organization}/{name}/versions/{version}` | Get a specific version |
+| `PATCH` | `/@{organization}/{name}/versions/{version}` | Update version |
+| `DELETE` | `/@{organization}/{name}/versions/{version}` | Soft-delete a version (`status='deleted'`) |
+| `POST` | `/@{organization}/{name}/tags` | Set a skill-level tag |
+| `DELETE` | `/@{organization}/{name}/tags/{key}` | Delete a skill-level tag |
+| `POST` | `/@{organization}/{name}/versions/{version}/tags` | Set a version-level tag |
+| `DELETE` | `/@{organization}/{name}/versions/{version}/tags/{key}` | Delete a version tag |
+| `POST` | `/@{organization}/{name}/aliases` | Set an alias |
+| `GET` | `/@{organization}/{name}/aliases/{alias}` | Resolve alias to `SkillVersion` |
+| `DELETE` | `/@{organization}/{name}/aliases/{alias}` | Delete an alias |
 
-When `organization` is empty, the path segment uses the literal
-value `_` as a placeholder (e.g., `/_/code-review/versions/1`).
+Each entity-specific row above (those whose path begins
+`/@{organization}/{name}`) shows the with-organization route. Every such
+operation is exposed as two concrete route templates: the with-organization
+form listed and a no-organization form that is the same path with the leading
+`@{organization}/` segment removed. For
+example, "Get a specific version" is both
+`GET /@{organization}/{name}/versions/{version}` (organization present) and
+`GET /{name}/versions/{version}` (no organization); "Get skill by
+organization and name" is both `GET /@{organization}/{name}` and
+`GET /{name}`. There is no placeholder for the empty organization: the
+`@{organization}` segment and its slash are omitted entirely. So
+`GET /code-review/versions/1` addresses a skill with no organization, and
+`GET /@acme/code-review/versions/1` addresses the same-named skill in
+organization `acme`.
 
-This intentionally differs from the URI format, which omits the empty
-organization entirely rather than using a placeholder. The two schemes
-disambiguate differently. URIs rely on the trailing segment (an integer for
-skills, a SemVer string for agent plugins) to tell `name/version` apart from
-`organization/name`, so no placeholder is needed. REST paths cannot use that
-trick because they have fixed keyword subresource segments (`versions`, `tags`,
-`aliases`) after the name. Omitting the placeholder would make paths like
-`/acme/versions` ambiguous between `(organization=acme, name=versions)` and
-`(empty organization, name=acme, versions collection)`. The `_` placeholder
-keeps the empty-organization case unambiguous (always `/_/name/...`) without
-reserving subresource keywords as forbidden names. The artifact storage paths
-use `_` for the same reason.
+This mirrors the URI format, which uses the same `@organization` marker and
+likewise omits it when empty. The `@` marker is what keeps the paths
+unambiguous even though fixed keyword subresource segments (`versions`,
+`tags`, `aliases`) follow the name: an organization segment always begins
+with `@` and names cannot begin with `@`. So `/acme/versions` can only mean
+`(no organization, name=acme, the versions collection)`, never
+`(organization=acme, name=versions)`; and conversely `/@acme/versions` can
+only mean the skill literally named `versions` in organization `acme`, never
+a versions collection.
+
+Because both the with-organization template `/@{organization}/{name}` and the
+no-organization template `/{name}/versions` structurally match a two-segment
+path, the routing layer must not rely on match order alone: the `{name}`
+segment (and the leading no-organization segment) is constrained to reject a
+leading `@`, so `/@acme/versions` binds only the organization template and
+`/acme/versions` binds only the no-organization template. Splitting each
+operation into a with-organization and a no-organization route template is
+the cost of omitting the empty-organization segment, but it needs no
+placeholder value and no reserved subresource keywords. The artifact storage
+paths use the same `@organization` convention.
 
 Similarly, agent plugin endpoints are exposed under both
 `/api/3.0/mlflow/agent-plugins` and
@@ -1339,25 +1361,28 @@ All paths relative to the logical agent-plugins router prefix.
 | `POST` | `/` | Create an agent plugin |
 | `GET` | `/` | Search agent plugins |
 | `POST` | `/register` | Validate or synthesize `plugin_json`, create or reuse the parent, and create a version |
-| `GET` | `/{organization}/{name}` | Get agent plugin by organization and name |
-| `PATCH` | `/{organization}/{name}` | Update agent plugin fields |
-| `DELETE` | `/{organization}/{name}` | Hard-delete agent plugin (cascades versions and memberships) |
-| `POST` | `/{organization}/{name}/versions` | Create an agent plugin version with members |
-| `GET` | `/{organization}/{name}/versions` | Search agent plugin versions |
-| `GET` | `/{organization}/{name}/versions/{version}` | Get a specific agent plugin version |
-| `PATCH` | `/{organization}/{name}/versions/{version}` | Update agent plugin version status |
-| `DELETE` | `/{organization}/{name}/versions/{version}` | Soft-delete an agent plugin version (`status='deleted'`) |
-| `POST` | `/{organization}/{name}/tags` | Set an agent plugin-level tag |
-| `DELETE` | `/{organization}/{name}/tags/{key}` | Delete an agent plugin-level tag |
-| `POST` | `/{organization}/{name}/versions/{version}/tags` | Set an agent plugin version tag |
-| `DELETE` | `/{organization}/{name}/versions/{version}/tags/{key}` | Delete an agent plugin version tag |
-| `POST` | `/{organization}/{name}/aliases` | Set an agent plugin alias |
-| `GET` | `/{organization}/{name}/aliases/{alias}` | Resolve agent plugin alias to version |
-| `DELETE` | `/{organization}/{name}/aliases/{alias}` | Delete an agent plugin alias |
+| `GET` | `/@{organization}/{name}` | Get agent plugin by organization and name |
+| `PATCH` | `/@{organization}/{name}` | Update agent plugin fields |
+| `DELETE` | `/@{organization}/{name}` | Hard-delete agent plugin (cascades versions and memberships) |
+| `POST` | `/@{organization}/{name}/versions` | Create an agent plugin version with members |
+| `GET` | `/@{organization}/{name}/versions` | Search agent plugin versions |
+| `GET` | `/@{organization}/{name}/versions/{version}` | Get a specific agent plugin version |
+| `PATCH` | `/@{organization}/{name}/versions/{version}` | Update agent plugin version status |
+| `DELETE` | `/@{organization}/{name}/versions/{version}` | Soft-delete an agent plugin version (`status='deleted'`) |
+| `POST` | `/@{organization}/{name}/tags` | Set an agent plugin-level tag |
+| `DELETE` | `/@{organization}/{name}/tags/{key}` | Delete an agent plugin-level tag |
+| `POST` | `/@{organization}/{name}/versions/{version}/tags` | Set an agent plugin version tag |
+| `DELETE` | `/@{organization}/{name}/versions/{version}/tags/{key}` | Delete an agent plugin version tag |
+| `POST` | `/@{organization}/{name}/aliases` | Set an agent plugin alias |
+| `GET` | `/@{organization}/{name}/aliases/{alias}` | Resolve agent plugin alias to version |
+| `DELETE` | `/@{organization}/{name}/aliases/{alias}` | Delete an agent plugin alias |
 
-Same `_` placeholder convention for empty organization as skill
-endpoints. Agent plugin version path values follow the same length and reserved
-character validation as Agent Plugin URIs.
+Same `@organization` segment convention as skill endpoints: each
+entity-specific row (those beginning `/@{organization}/{name}`) shows the
+with-organization route, and every such operation also has a no-organization
+route with the leading `@{organization}/` segment removed. Agent plugin
+version path values follow the same length and reserved character validation
+as Agent Plugin URIs.
 
 ### Pagination and filtering
 
@@ -1416,7 +1441,7 @@ class UpdateSkillRequest(BaseModel):
 
 
 class CreateSkillVersionRequest(BaseModel):
-    name: str | None = None  # optional for POST /register (inferred from source when omitted); ignored for POST /{organization}/{name}/versions (name from parent)
+    name: str | None = None  # optional for POST /register (inferred from source when omitted); ignored for POST /@{organization}/{name}/versions (name from parent)
     organization: str = ""  # for POST /register only; ignored for versioned paths
     source: str | None = None
     ref: str | None = None
@@ -1592,20 +1617,23 @@ are present, they must agree.
 skill `name` values that would create ambiguity in URIs, REST paths, or artifact
 storage paths:
 
-- `organization` cannot be `_` (reserved as the empty-organization
-  placeholder in REST paths and artifact paths).
-- `name` cannot be purely numeric (e.g., `123`), because URI
-  disambiguation relies on integer parsing to distinguish
-  `name/version` from `organization/name`.
 - Neither field may contain `/`, `@`, `#`, or `?` (URI-significant
-  characters).
+  characters). The leading `@` that marks an organization segment is
+  therefore never part of an organization or name value itself.
+
+Because an organization is always marked by a leading `@` in URIs and REST
+paths, the parser never has to guess whether a segment is an organization or
+a name. Numeric skill names (e.g., `123`) are therefore permitted, since
+there is no longer any `name/version` versus `organization/name` ambiguity
+to resolve by integer parsing.
 
 Agent plugin names instead follow the canonical Agent Plugins constraints:
 1–64 lowercase ASCII letters, digits, hyphens, and periods; alphanumeric first
-and last characters; and no consecutive hyphens or periods. Additionally, agent
-plugin names that are parseable as valid SemVer are rejected, because the URI
-parser uses SemVer recognition to distinguish `name/version` from `org/name`.
-MLflow applies the same organization constraints around that standard name.
+and last characters; and no consecutive hyphens or periods. Agent plugin names
+that parse as valid SemVer are likewise permitted, since the `@` marker
+distinguishes an organization from a `name/version` sequence without relying
+on SemVer recognition. MLflow applies the same organization constraints around
+that standard name.
 
 ## Python SDK and CLI
 

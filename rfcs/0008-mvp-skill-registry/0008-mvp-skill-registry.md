@@ -520,7 +520,7 @@ AgentPluginVersionMember {
 ```
 
 The `AgentPluginVersionMember` fields are storage columns parsed
-from the member URI string (e.g., `skills:/acme/code-review/1`
+from the member URI string (e.g., `skills:/@acme/code-review/1`
 decomposes into `member_organization`, `member_name`,
 and `member_version`).
 
@@ -580,13 +580,12 @@ parent presentation fields are unset, the UI may fall back to the latest
 resolved manifest metadata; the API returns parent fields as stored.
 
 Agent plugins use a dedicated URI namespace. A parent is addressed as
-`agent-plugins:/<name>`, or `agent-plugins:/<organization>/<name>` when an
+`agent-plugins:/<name>`, or `agent-plugins:/@<organization>/<name>` when an
 organization is present; an exact version appends `/<version>` and an alias
-appends `@<alias>` to the parent URI. When the organization is empty it is
-omitted rather than represented by a placeholder segment. Because every agent
-plugin version is valid SemVer, the parser disambiguates `<name>/<version>`
-from `<organization>/<name>` by checking whether the last segment parses as
-SemVer.
+appends `@<alias>` to the parent URI. An organization is marked by a leading
+`@` and is omitted when empty. Because names cannot begin with `@`, the parser
+identifies the organization by that marker rather than by inspecting whether a
+segment parses as SemVer.
 
 Follow-up work currently tracked as
 [RFC-0009: Extended Skill Bundles](https://github.com/mlflow/rfcs/pull/27)
