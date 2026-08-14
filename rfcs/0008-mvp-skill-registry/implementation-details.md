@@ -187,13 +187,17 @@ member names are distinct within an agent plugin version. The primary key alone
 does not guarantee this, because it also includes `member_organization` and
 `member_version`; those two columns are retained for the `skill_versions` FK and
 as stored data, not to distinguish rows for uniqueness. For an assembled plugin
-the pull layout writes each member to `skills/<member-name>/`, keyed on the name
-alone, so a name collision would be ambiguous on disk; for a monolithic plugin
-the embedded skills are discovered from distinct `skills/*/SKILL.md`
-directories, which are already name-unique. Because the name is the on-disk key,
-a plugin version cannot contain two skills of the same name from different
-organizations. Create requests with duplicate member names are rejected before
-insert.
+the `skills/<member-name>/` pull layout is keyed on the name alone, so a name
+collision would be ambiguous on disk, and the server rejects a create request
+whose member list repeats a name. For a monolithic plugin the importer derives
+each embedded skill's name from its `SKILL.md` and rejects a package in which
+two skills resolve to the same name; distinct `skills/*/SKILL.md` directories do
+not by themselves guarantee this, since a skill's name is declared in `SKILL.md`
+rather than taken from the directory, so the check is on the derived names
+rather than the directory paths. Because member names are unique within a
+version, a plugin version cannot contain two skills of the same name from
+different organizations. Create requests with duplicate member names are
+rejected before insert.
 
 ### `agent_plugin_tags`
 
@@ -1218,6 +1222,7 @@ class MlflowClient:
         name: str,
         organization: str = "",
         source: GitSource | OCISource | ZipSource | str | None = None,
+        status: str = "active",
     ) -> SkillVersion: ...
 
     def get_skill_version(
@@ -1818,24 +1823,38 @@ flag also accepted; for example, `mlflow skills get skills:/code-review` and
 | `mlflow skills register zip` | `register_skill(source=ZipSource(...))` | Register from a ZIP archive |
 | `mlflow skills register` | `register_skill(source="./local-path")` | Register from a local directory (uploaded to MLflow artifact storage) |
 | `mlflow skills get` | `get_skill()` | Get skill metadata |
+| `mlflow skills update` | `update_skill()` | Update skill description |
 | `mlflow skills search` | `search_skills()` | Search skills |
 | `mlflow skills get-version` | `get_skill_version()` | Get a specific version |
+| `mlflow skills search-versions` | `search_skill_versions()` | Search versions of a skill |
 | `mlflow skills update-version` | `update_skill_version()` | Update version status |
+| `mlflow skills delete-version` | `delete_skill_version()` | Soft-delete a version (withdrawal kill switch) |
 | `mlflow skills set-alias` | `set_skill_alias()` | Set a version alias |
-| `mlflow skills set-tag` | `set_skill_tag()` | Set a tag |
+| `mlflow skills delete-alias` | `delete_skill_alias()` | Delete a version alias |
+| `mlflow skills set-tag` | `set_skill_tag()` | Set a skill-level tag |
+| `mlflow skills delete-tag` | `delete_skill_tag()` | Delete a skill-level tag |
+| `mlflow skills set-version-tag` | `set_skill_version_tag()` | Set a version tag |
+| `mlflow skills delete-version-tag` | `delete_skill_version_tag()` | Delete a version tag |
 | `mlflow skills pull` | `pull()` | Pull content to local filesystem |
 | `mlflow agent-plugins create` | `create_agent_plugin()` | Create an agent plugin |
 | `mlflow agent-plugins create-version` | `create_agent_plugin_version()` | Create a version on an existing parent |
 | `mlflow agent-plugins register` | `register_agent_plugin()` | Create or reuse the parent and register a canonical version |
 | `mlflow agent-plugins get` | `get_agent_plugin()` | Get agent plugin metadata |
+| `mlflow agent-plugins get-version` | `get_agent_plugin_version()` | Get a specific version |
+| `mlflow agent-plugins update` | `update_agent_plugin()` | Update agent plugin description |
 | `mlflow agent-plugins search` | `search_agent_plugins()` | Search agent plugins |
 | `mlflow agent-plugins search-versions` | `search_agent_plugin_versions()` | Search agent plugin versions |
 | `mlflow agent-plugins set-alias` | `set_agent_plugin_alias()` | Set an agent plugin alias |
+| `mlflow agent-plugins delete-alias` | `delete_agent_plugin_alias()` | Delete an agent plugin alias |
 | `mlflow agent-plugins set-tag` | `set_agent_plugin_tag()` | Set an agent plugin-level tag |
+| `mlflow agent-plugins delete-tag` | `delete_agent_plugin_tag()` | Delete an agent plugin-level tag |
 | `mlflow agent-plugins set-version-tag` | `set_agent_plugin_version_tag()` | Set an agent plugin version tag |
+| `mlflow agent-plugins delete-version-tag` | `delete_agent_plugin_version_tag()` | Delete an agent plugin version tag |
 | `mlflow agent-plugins update-version` | `update_agent_plugin_version()` | Update agent plugin version status |
+| `mlflow agent-plugins delete-version` | `delete_agent_plugin_version()` | Soft-delete a version |
 | `mlflow agent-plugins introspect` | `introspect_plugin()` | Preview a local or remote plugin without registry writes |
 | `mlflow agent-plugins import` | `import_plugin()` | Import a plugin as a monolithic agent plugin |
+| `mlflow agent-plugins pull` | `pull()` | Pull content to local filesystem |
 
 `create-version` and `register` accept `--plugin-json PATH` for a full standard
 manifest. When omitted for an assembled plugin, `--version` is required and
@@ -1845,6 +1864,15 @@ existing parent; `--name` for `register`) and the supplied version. Search
 commands accept `--filter-string`, which
 covers both structured filters and free-text matching against the derived
 `search_text` field (e.g., `--filter-string "search_text LIKE '%review%'"`).
+
+The CLI covers routine create, read, update, tag, alias, and version-status
+operations, plus version soft delete (`delete-version`). Soft-deleting a skill
+version is the withdrawal kill switch, since it also withdraws the agent plugin
+versions that contain that member; soft-deleting an agent plugin version affects
+only that version. The CLI does not expose top-level hard delete of a parent
+entity: `delete_skill` and `delete_agent_plugin` are administrative operations
+available through the SDK (`MlflowClient`) and REST only, and are intentionally
+omitted from the CLI to keep destructive cascade deletes off the command line.
 
 **Relationship to existing `mlflow skills` subcommands.** MLflow already
 has `mlflow skills list` and `mlflow skills view` subcommands
@@ -1896,6 +1924,13 @@ SemVer); when the manifest does not include a version, the user must
 supply one via `--version` or the `version` parameter.
 
 ### Registration behavior
+
+Before registering anything, the importer derives each discovered skill's
+name from its `SKILL.md` and rejects the package if two skills resolve to the
+same name, since member names must be unique within the resulting agent plugin
+version (see Member-name uniqueness). Directory paths under `skills/*/` are not
+used as the uniqueness key, because a skill's name is declared in `SKILL.md`
+rather than taken from its directory.
 
 For each discovered skill, the importer creates a `SkillVersion` whose
 version is server-assigned, whose `source` is `None` (no typed source

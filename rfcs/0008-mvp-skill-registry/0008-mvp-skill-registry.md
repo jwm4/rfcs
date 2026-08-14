@@ -365,8 +365,12 @@ MLflow's
 [LLM judges](https://mlflow.org/docs/latest/genai/eval-monitor/scorers/)
 can autonomously explore execution traces via MCP tools.
 
-1. Register a new skill version and create a draft agent plugin
-   version for evaluation:
+This scenario assumes `pr-workflow` already has an active version `1.0.0`
+with the `production` alias pointing to it; the goal is to evaluate a
+candidate `1.1.0` against it.
+
+1. Register a new skill version and create the candidate draft agent plugin
+   version `1.1.0` for evaluation:
    ```bash
    mlflow skills register git --name code-review \
        --url https://github.com/acme/agent-skills.git \
@@ -377,11 +381,20 @@ can autonomously explore execution traces via MCP tools.
        --skill skills:/style-check/1 \
        --status draft
    ```
-2. Pull version `1.0.0`, install it into the harness manually, and run it
-   on a set of test inputs. Traces are recorded in MLflow under
-   experiment A.
-3. Pull version `1.1.0`, install it into the harness manually, and run it
-   on the same test inputs. Traces are recorded under experiment B.
+2. Pull the current production version `1.0.0`, install it into the harness
+   manually, and run it on a set of test inputs. Traces are recorded in
+   MLflow under experiment A.
+   ```bash
+   mlflow agent-plugins pull agent-plugins:/pr-workflow/1.0.0 \
+       --destination ./pr-workflow-1.0.0
+   ```
+3. Pull the candidate version `1.1.0`, install it into the harness manually,
+   and run it on the same test inputs. Traces are recorded under
+   experiment B.
+   ```bash
+   mlflow agent-plugins pull agent-plugins:/pr-workflow/1.1.0 \
+       --destination ./pr-workflow-1.1.0
+   ```
 4. Use `mlflow.genai.evaluate()` with a `make_judge` scorer that
    uses the `{{ trace }}` template variable to score both sets of
    traces against quality criteria (correctness, helpfulness, safety).
@@ -642,12 +655,14 @@ not alter an existing plugin version's members. Member names must be unique
 within an agent plugin version: two members cannot share a name, regardless of
 their organization or version. For an assembled plugin this is because pull
 writes each member to `skills/<member-name>/`, keyed on the name alone, so a
-collision would be ambiguous on disk; for a monolithic plugin the embedded
-skills are discovered from distinct `skills/*/SKILL.md` directories, which are
-already name-unique. A create request with duplicate member names is rejected. A
-consequence is that a single plugin version cannot assemble two skills that
-share a name from different organizations; compose them under distinct names or
-as separate plugins.
+collision would be ambiguous on disk, and the create request is rejected when
+its member list repeats a name. For a monolithic plugin the importer derives
+each embedded skill's name from its `SKILL.md` and rejects a package in which
+two skills resolve to the same name; distinct `skills/*/SKILL.md` directories do
+not by themselves guarantee distinct names, because the name is declared in
+`SKILL.md` rather than taken from the directory. A consequence is that a single
+plugin version cannot assemble two skills that share a name from different
+organizations; compose them under distinct names or as separate plugins.
 An agent plugin version is one of two kinds:
 
 - **Assembled:** captures member references for individual skills.
