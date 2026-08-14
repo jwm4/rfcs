@@ -263,9 +263,9 @@ class Skill:
 | `name` | `str` | Human-readable name, unique within `(workspace, organization)` |
 | `organization` | `str` | Scopes ownership (e.g., team or publisher); defaults to `""` (empty string) |
 | `description` | `str` | Optional human-readable description of the skill |
-| `status` | `SkillStatus` | Read-only; derived from the parent-resolved version: highest active version number if present, otherwise highest non-deleted non-active version number |
+| `status` | `SkillStatus \| None` | Read-only; derived from the parent-resolved version: highest active version number if present, otherwise highest non-deleted non-active version number. `None` when the skill has no non-`deleted` version |
 | `aliases` | `dict[str, int]` | Stable version pointers (e.g., `{"production": 2}`); read-only, populated from `skill_aliases` table |
-| `latest_version` | `int` | Read-only; highest version number among `active` versions if one exists, otherwise highest non-`deleted` non-`active` version |
+| `latest_version` | `int \| None` | Read-only; highest version number among `active` versions if one exists, otherwise highest non-`deleted` non-`active` version. `None` when the skill has no non-`deleted` version |
 | `workspace` | `str` | Visibility boundary |
 
 ### SkillVersion entity
@@ -392,19 +392,31 @@ MLflow artifact storage rather than treating it as a remote pointer:
 
 1. The client validates the local directory and preflights that the
    path can be registered.
-2. The client creates the `SkillVersion` with `source` set to null.
+2. The client creates the `SkillVersion` with `source` set to null and
+   `status="draft"`, regardless of the caller's requested final status.
    The server assigns the version number and infers
-   `source_type="mlflow"` from the null source.
+   `source_type="mlflow"` from the null source. Because a draft is not
+   preferred by latest resolution over an existing `active` or
+   `deprecated` version, an in-flight upload never displaces the currently
+   recommended version. (When the entity has no other version, latest
+   resolution may surface the in-flight draft; it carries `status="draft"`
+   and is discarded if the upload fails, per step 4.)
 3. Using the returned version number, the client uploads each file
    through MLflow's existing artifact APIs to the controlled artifact
    prefix (`skills/@<organization>/<name>/<version>/`, with the
    `@<organization>` segment omitted when there is no organization).
+4. On success the client transitions the version to the caller's
+   requested final status (`active` by default, or `draft` when the
+   caller explicitly registered a draft). On failure the client discards
+   the version with the normal `draft` -> `deleted` transition and
+   removes any partially uploaded files.
 
-Version creation and upload are not atomic. If upload fails after the
-version record is created, the version exists with no content. The
-client makes a best-effort attempt to delete the version record and
-any partially uploaded files. A backend without deletion support can
-retain unreferenced uploaded files until garbage collection.
+This keeps the published view atomic: a version becomes `active` only
+after its content is fully uploaded, and a failed upload leaves a
+discarded draft rather than a content-less `active` version. Creating as `draft` first means the flow needs no special
+single-version hard delete; it reuses the existing `draft` -> `deleted`
+transition. A backend without deletion support can retain the discarded
+draft's unreferenced files until garbage collection.
 
 **Version uniqueness.** The combination of
 `(workspace, organization, name, version)` is unique. A skill
@@ -441,7 +453,8 @@ class AgentPlugin:
 ```
 
 `AgentPlugin.status` is read-only and comes from the same latest-resolved
-version as `latest_version`. Parent `description` is mutable MLflow presentation
+version as `latest_version`. Both are `None` when the plugin has no
+non-`deleted` version. Parent `description` is mutable MLflow presentation
 metadata. When unset, the UI may fall back to the resolved
 `plugin_json["description"]`; the API returns the parent value as stored.
 
@@ -711,6 +724,8 @@ class SkillRegistryMixin:
     def get_latest_skill_version(
         self, name: str, organization: str = "",
     ) -> SkillVersion:
+        """Raises RESOURCE_DOES_NOT_EXIST when the skill has no
+        non-deleted version (nothing resolves as latest)."""
         raise NotImplementedError(self.__class__.__name__)
 
     def search_skill_versions(
@@ -772,6 +787,9 @@ class SkillRegistryMixin:
         self, name: str, alias: str, version: int,
         organization: str = "",
     ) -> None:
+        """Raises RESOURCE_DOES_NOT_EXIST when the target version does
+        not exist or is deleted, so an alias can never dangle. Any other
+        status (draft, active, deprecated) is a valid target."""
         raise NotImplementedError(self.__class__.__name__)
 
     def delete_skill_alias(
@@ -848,6 +866,8 @@ class SkillRegistryMixin:
     def get_latest_agent_plugin_version(
         self, name: str, organization: str = "",
     ) -> AgentPluginVersion:
+        """Raises RESOURCE_DOES_NOT_EXIST when the plugin has no
+        non-deleted version (nothing resolves as latest)."""
         raise NotImplementedError(self.__class__.__name__)
 
     def search_agent_plugin_versions(
@@ -909,6 +929,9 @@ class SkillRegistryMixin:
         self, name: str, alias: str, version: str,
         organization: str = "",
     ) -> None:
+        """Raises RESOURCE_DOES_NOT_EXIST when the target version does
+        not exist or is deleted, so an alias can never dangle. Any other
+        status (draft, active, deprecated) is a valid target."""
         raise NotImplementedError(self.__class__.__name__)
 
     def delete_agent_plugin_alias(
@@ -1444,6 +1467,13 @@ keywords, and author name. Structured filters are the same as Skills, plus
 `member_name = 'code-review'` to find agent plugins that include a given skill.
 If a lifecycle transition changes which version resolves as latest, the
 `search_text` matches for the parent change accordingly.
+
+On parent search, a `status` filter matches the parent's derived status,
+resolved from the same latest-resolved version that drives `latest_version`
+and the entity's read-only `status`, since parent tables have no status
+column of their own. A parent with no non-`deleted` version has a `None`
+derived status and is excluded by any `status` equality filter. To filter on
+the status of a specific version, use version search.
 
 **Versions (all entity types):** `status = 'active'`,
 `organization = 'acme'`, `source_type = 'git'`, and

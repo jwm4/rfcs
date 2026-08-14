@@ -672,7 +672,8 @@ status:
 
 ```mermaid
 stateDiagram-v2
-    [*] --> active
+    [*] --> active : create (default)
+    [*] --> draft : create as draft
     active --> draft : unpublish
     active --> deprecated
     draft --> active : publish
@@ -683,7 +684,7 @@ stateDiagram-v2
 
 | State | Meaning | Downstream surfacing |
 |---|---|---|
-| `draft` | Registered but not yet ready for downstream use | Not surfaced to consumers |
+| `draft` | Registered but not yet marked ready for general use | Reachable by an explicit version or alias; not preferred by latest resolution, which surfaces a draft only when no `active` or `deprecated` version exists |
 | `active` | Ready for downstream use | Surfaced to discovery and consumers |
 | `deprecated` | Still functional but no longer recommended | Surfaced with deprecation signal |
 | `deleted` | Soft-deleted; preserved internally for history, no longer active | Not surfaced by normal get/search/list APIs |
@@ -698,9 +699,14 @@ Allowed transitions:
 | `active` | `draft`, `deprecated` |
 | `deprecated` | `active`, `deleted` |
 
-`draft` allows a version to be registered and reviewed before being
-made visible to consumers. `active` can return to `draft` (unpublish)
-for cases where a version needs to be pulled back for further review.
+`draft` allows a version to be registered and reviewed before it is
+recommended to consumers. A draft is still reachable by an explicit
+version pin or alias, so a publisher can share it for review, and it is
+not preferred by latest resolution: latest resolves to a draft only when
+the entity has no `active` or `deprecated` version (for example, a
+brand-new entity whose first version is still a draft). `active` can
+return to `draft` (unpublish) for cases where a version needs to be
+pulled back for further review.
 `deprecated` can return to `active` (re-activate) for cases where a
 deprecation was premature. `deleted` is terminal.
 
@@ -725,7 +731,9 @@ rather than top-level hard delete.
 `Skill.status` and `AgentPlugin.status` are read-only. They are derived from the
 same latest-resolved version used for each entity's `latest_version`. Resolution
 prefers eligible `active` versions and otherwise falls back to non-`deleted`
-non-`active` versions. Deleted versions never drive parent status.
+non-`active` versions. Deleted versions never drive parent status. When an
+entity has no non-`deleted` version, it has no resolved latest version: both
+`status` and `latest_version` are `None`.
 
 #### `latest_version` resolution
 
@@ -733,11 +741,20 @@ Skill version numbers are server-assigned monotonic integers. Each new
 version for a given skill receives the next integer.
 `get_latest_skill_version(name, organization)` returns the highest
 version number among `active` versions if one exists, otherwise the
-highest version number among non-`deleted` non-`active` versions.
+highest version number among non-`deleted` non-`active` versions. If the
+skill has no non-`deleted` version, there is no latest version and the
+call raises `RESOURCE_DOES_NOT_EXIST`.
 
 `latest_version` is a read-only computed field on the parent entity
 (not manually pinnable); aliases cover the use case of pointing a
 stable name (e.g., `production`) at a specific version.
+
+Setting an alias requires the target version to exist and not be
+`deleted`. `set_skill_alias` and `set_agent_plugin_alias` reject a
+missing or deleted target so an alias can never dangle. An alias may
+point at a `draft`, `active`, or `deprecated` version: pointing an alias
+at a version is an explicit choice, so it resolves regardless of status.
+Deleting a version continues to remove any aliases that point to it.
 
 The alias name `latest` is reserved:
 `set_skill_alias(name, alias="latest", organization, ...)` is
@@ -751,7 +768,9 @@ to `plugin_json["version"]`. All versions are valid SemVer (semverish inputs
 are normalized on creation). Among eligible `active` versions, semantic
 precedence selects `latest`. Creation time breaks equal SemVer precedence,
 such as versions that differ only in build metadata. When there is no active
-version, the same rule applies to non-`deleted` non-`active` candidates.
+version, the same rule applies to non-`deleted` non-`active` candidates. If the
+plugin has no non-`deleted` version, there is no latest version and
+`get_latest_agent_plugin_version` raises `RESOURCE_DOES_NOT_EXIST`.
 
 The reserved alias behavior also applies to agent plugins:
 `set_agent_plugin_alias(name, alias="latest", organization, ...)`
@@ -955,10 +974,11 @@ in [implementation-details.md](implementation-details.md).
   storage.
 
 - **Artifact upload atomicity.** Client-side artifact upload and skill
-  version creation are separate operations. The client performs
-  best-effort cleanup when version creation fails, but an artifact
-  backend without deletion support can retain unreferenced uploaded
-  files until garbage collection.
+  version creation are separate operations. The upload flow keeps the
+  version in `draft` until the upload completes, so a failure leaves a
+  discarded draft rather than a content-less `active` version, but an
+  artifact backend without deletion support can retain the discarded
+  draft's unreferenced files until garbage collection.
 
 # Alternatives
 
