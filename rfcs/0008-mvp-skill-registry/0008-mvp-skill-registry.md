@@ -225,7 +225,7 @@ infrastructure; registry-specific trace linkage (SKILL spans,
    select the source type, fill in the fields, then submit.
 2. Register an assembled agent plugin version that pins these members:
    ```bash
-   mlflow agent-plugins register --plugin-uri agent-plugins:/pr-workflow \
+   mlflow agent-plugins register --name pr-workflow \
        --version 0.1.0 \
        --skill skills:/code-review/1 \
        --skill skills:/style-check/1
@@ -238,14 +238,14 @@ infrastructure; registry-specific trace linkage (SKILL spans,
    transition to `draft` for further review before making it
    available:
    ```bash
-   mlflow agent-plugins update-version --plugin-uri agent-plugins:/pr-workflow/0.1.0 \
+   mlflow agent-plugins update-version agent-plugins:/pr-workflow/0.1.0 \
        --status draft
    ```
    **UI path:** Open the agent plugin version detail page, use the status
    dropdown to change from "active" to "draft."
 4. Set an alias for stable downstream resolution:
    ```bash
-   mlflow agent-plugins set-alias --plugin-uri agent-plugins:/pr-workflow \
+   mlflow agent-plugins set-alias agent-plugins:/pr-workflow \
        --alias production --version 0.1.0
    ```
    **UI path:** In the agent plugin detail page, click "Add Alias" and map
@@ -311,12 +311,12 @@ infrastructure; registry-specific trace linkage (SKILL spans,
    ```
 2. Find assembled agent plugins that include `code-review`:
    ```bash
-   mlflow skills get --skill-uri skills:/code-review
+   mlflow skills get skills:/code-review
    ```
    The skill detail includes agent plugin memberships.
 3. Create a new version of the agent plugin with the updated member:
    ```bash
-   mlflow agent-plugins create-version --plugin-uri agent-plugins:/pr-workflow \
+   mlflow agent-plugins create-version agent-plugins:/pr-workflow \
        --plugin-json ./plugin-1.1.0.json \
        --skill skills:/code-review/2 \
        --skill skills:/style-check/1
@@ -341,18 +341,18 @@ infrastructure; registry-specific trace linkage (SKILL spans,
    tags.
 3. Get details on a promising result:
    ```bash
-   mlflow skills get --skill-uri skills:/code-review
+   mlflow skills get skills:/code-review
    ```
    **UI path:** Click a card to open the detail view with metadata,
    version history, aliases, tags, and agent plugin memberships.
 4. Inspect a specific version's source and metadata:
    ```bash
-   mlflow skills get-version --skill-uri skills:/code-review/1
+   mlflow skills get-version skills:/code-review/1
    ```
 5. Pull the skill locally to read the content and decide whether
    it fits:
    ```bash
-   mlflow skills pull --skill-uri skills:/code-review/1 \
+   mlflow skills pull skills:/code-review/1 \
        --destination ./review-skill
    ```
 
@@ -368,7 +368,7 @@ can autonomously explore execution traces via MCP tools.
    mlflow skills register git --name code-review \
        --url https://github.com/acme/agent-skills.git \
        --ref v2.0.0 --subpath code-review
-   mlflow agent-plugins create-version --plugin-uri agent-plugins:/pr-workflow \
+   mlflow agent-plugins create-version agent-plugins:/pr-workflow \
        --plugin-json ./plugin-1.1.0.json \
        --skill skills:/code-review/2 \
        --skill skills:/style-check/1 \
@@ -387,9 +387,9 @@ can autonomously explore execution traces via MCP tools.
 6. If version `1.1.0` is better, transition it to active and update the
    production alias:
    ```bash
-   mlflow agent-plugins update-version --plugin-uri agent-plugins:/pr-workflow/1.1.0 \
+   mlflow agent-plugins update-version agent-plugins:/pr-workflow/1.1.0 \
        --status active
-   mlflow agent-plugins set-alias --plugin-uri agent-plugins:/pr-workflow \
+   mlflow agent-plugins set-alias agent-plugins:/pr-workflow \
        --alias production --version 1.1.0
    ```
 
@@ -404,7 +404,7 @@ runs the agent without the skill installed.
    are recorded in MLflow under experiment A (baseline).
 2. Pull the skill and install it into the harness:
    ```bash
-   mlflow skills pull --skill-uri skills:/code-review@production
+   mlflow skills pull skills:/code-review@production
    # Then install the pulled content into the harness manually
    ```
 3. Run the same agent on the same test inputs. Traces are recorded
@@ -435,7 +435,7 @@ both against the same inputs and scorers.
    mlflow skills register git --name code-review \
        --url https://github.com/acme/agent-skills.git \
        --ref v1.1.0 --subpath code-review
-   mlflow agent-plugins create-version --plugin-uri agent-plugins:/pr-workflow \
+   mlflow agent-plugins create-version agent-plugins:/pr-workflow \
        --plugin-json ./plugin-1.1.0.json \
        --skill skills:/code-review/2 \
        --skill skills:/style-check/1 \

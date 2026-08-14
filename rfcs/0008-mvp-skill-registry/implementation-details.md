@@ -580,8 +580,14 @@ are valid SemVer, the parser can distinguish `name/version` from
 Agent plugin versions in URIs must be nonempty, valid SemVer, fit within the
 database field, and cannot contain `/`, `@`, `#`, or `?`.
 
-In the CLI, skill commands accept `--skill-uri` and agent plugin commands
-accept `--plugin-uri`.
+In the CLI, commands that operate on an already-registered skill or agent
+plugin accept its URI as an optional positional argument, with the equivalent
+`--skill-uri` (skills) or `--plugin-uri` (agent plugins) flag also accepted.
+For example, `mlflow skills get skills:/code-review` and
+`mlflow skills get --skill-uri skills:/code-review` are equivalent.
+Identity-establishing commands (`register`, and `agent-plugins create`) use
+`--name` (with an optional `--organization`) rather than a URI, since the entity
+does not exist yet.
 In agent plugin member lists, URIs appear as plain strings in `list[str]`.
 The server parses the URI into its constituent fields
 (`member_organization`, `member_name`, `member_version`)
@@ -1611,9 +1617,13 @@ helpers call internally. Skill-specific entity and request types are
 also re-exported from `mlflow.genai`. The `mlflow skills` and
 `mlflow agent-plugins` CLI command groups provide the same operations
 from the command line, mapping to whichever layer defines each
-function (the SDK function column below). Commands accept `--name` and optional
-`--organization` flags for entity identification. Skill commands also accept
-`--skill-uri`, while agent plugin commands accept `--plugin-uri`:
+function (the SDK function column below). Identity-establishing commands
+(`register`, and `agent-plugins create`) accept `--name` with an optional
+`--organization`. Commands that operate on
+an already-registered entity accept its URI as an optional positional argument,
+with the equivalent `--skill-uri` (skills) or `--plugin-uri` (agent plugins)
+flag also accepted; for example, `mlflow skills get skills:/code-review` and
+`mlflow skills get --skill-uri skills:/code-review` are equivalent:
 
 | CLI subcommand | SDK function | Description |
 |---|---|---|
@@ -1643,8 +1653,10 @@ function (the SDK function column below). Commands accept `--name` and optional
 
 `create-version` and `register` accept `--plugin-json PATH` for a full standard
 manifest. When omitted for an assembled plugin, `--version` is required and
-the command synthesizes a minimal manifest from `--name` or `--plugin-uri`
-and the supplied version. Search commands accept `--filter-string`, which
+the command synthesizes a minimal manifest from the target identity (the
+positional URI or `--plugin-uri` for `create-version`, which targets an
+existing parent; `--name` for `register`) and the supplied version. Search
+commands accept `--filter-string`, which
 covers both structured filters and free-text matching against the derived
 `search_text` field (e.g., `--filter-string "search_text LIKE '%review%'"`).
 
