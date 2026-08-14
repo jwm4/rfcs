@@ -51,8 +51,12 @@ delete. This supports administrative hard deletion of the parent
 and does not physically remove the version row.
 
 **Version ordering**: versions are monotonic integers assigned by
-the server. Each new version for a given skill receives
-the next integer. Ordering is a simple integer comparison.
+the server. The next version number is one greater than the maximum
+`version` across all existing rows for that skill, including soft-`deleted`
+ones, and is assigned atomically so concurrent registrations cannot
+collide or reuse a number. Because soft-deleted versions keep their rows,
+a number is never reused even after the version it identified is deleted.
+Ordering is a simple integer comparison.
 
 **Index**: `ix_skill_versions_latest_lookup` on `(workspace,
 organization, name, status, version)` supports latest-resolution
@@ -87,7 +91,18 @@ lookups.
 | `organization` | `String(256)` | PK, FK to `skills` |
 | `name` | `String(256)` | PK, FK to `skills` |
 | `alias` | `String(256)` | PK |
-| `version` | `Integer` | target version |
+| `version` | `Integer` | target `skill_versions.version` under the same parent; see alias integrity below |
+
+**Alias integrity.** An alias `version` targets a version row under the
+same `(workspace, organization, name)` parent. Integrity is enforced by
+the application rather than by a separate database FK: `set_skill_alias`
+(and `set_agent_plugin_alias`) rejects a missing or `deleted` target, and
+because a soft-deleted row persists a plain FK could not enforce the
+not-`deleted` rule. Soft-deleting a version removes any aliases that point
+to it. Agent plugin aliases (`agent_plugin_aliases`) follow the same
+pattern against `agent_plugin_versions.version`, and additionally reject a
+withdrawn target (a plugin version that contains a `deleted` member), so
+an alias cannot bypass the kill switch (see Deletion semantics).
 
 ### `agent_plugins`
 
@@ -115,7 +130,7 @@ PrimaryKey: `(workspace, organization, name)`.
 | `version_major` | `Integer` | extracted SemVer major component |
 | `version_minor` | `Integer` | extracted SemVer minor component |
 | `version_patch` | `Integer` | extracted SemVer patch component |
-| `plugin_json` | `JSON` | immutable canonical Agent Plugins manifest |
+| `plugin_json` | `JSON` | canonical Agent Plugins manifest; immutable after creation, with the version field canonicalized (normalized) on ingest |
 | `search_text` | `Text` | derived discovery projection of name, mutable parent description, organization, and the latest-resolved manifest's description, keywords, and author name |
 | `source_type` | `String(20)` | server-set; `git`, `oci`, `zip`, `mlflow`, `assembled` |
 | `source` | `String(2048)` | optional pointer to agent plugin |
@@ -158,9 +173,13 @@ FK: `(plugin_workspace, plugin_organization, plugin_name,
 plugin_version)` references `agent_plugin_versions`, CASCADE
 delete. A FK to `skill_versions` via `(plugin_workspace,
 member_organization, member_name, member_version)` enforces
-referential integrity with RESTRICT delete. Skills and agent
-plugins share the same workspace; `plugin_workspace` is reused for
-the skill FK.
+referential integrity with RESTRICT delete. The RESTRICT applies to
+physical (hard) deletion of a `skill_versions` row; it does not block a
+member's soft delete (status transition to `deleted`), which is allowed
+and handled as a derived withdrawal of the containing plugin versions
+across resolution, discovery, and pull (see Deletion semantics). Skills
+and agent plugins share the same workspace;
+`plugin_workspace` is reused for the skill FK.
 
 ### `agent_plugin_tags`
 
@@ -220,7 +239,16 @@ used by the Model Registry and RFC-0004:
   update `last_updated_timestamp`, remove aliases that point to the
   deleted version, and exclude the version from normal
   get/search/list/latest resolution. Active versions must first be
-  unpublished or deprecated before they can be deleted.
+  unpublished or deprecated before they can be deleted. A soft-deleted
+  skill version also withdraws every agent plugin version that contains
+  it, whether as a pinned member (assembled) or an embedded member
+  (monolithic): such a plugin version is treated as `deleted` for
+  resolution, discovery, and pull, so soft delete acts as a kill switch
+  across both plugin kinds. The withdrawal is derived from member status,
+  so the containing plugin version's membership rows and stored `status`
+  are unchanged; an operator can publish a replacement plugin version
+  referencing a fixed member. A `deprecated` member, by contrast, does not
+  trigger withdrawal and still resolves and pulls.
 - The `deleted` status is terminal. Internal audit or provenance paths
   may retain enough metadata to explain historical agent plugin
   snapshots, but deleted versions are not surfaced to consumers.
@@ -569,7 +597,11 @@ filesystem discovery and containment validation before registration.
 
 A member can appear in multiple agent plugins and multiple agent plugin versions.
 Membership is at the version level, so an agent plugin version is a
-reproducible snapshot of "these specific skill versions work together."
+reproducible record of "these specific skill versions work together." The
+membership record is preserved even if a member is later withdrawn; a
+soft-deleted member withdraws the containing plugin version from
+resolution, discovery, and pull (see Deletion semantics), while a
+`deprecated` member still resolves and pulls.
 
 ### Skill and Agent Plugin URI formats
 
@@ -930,8 +962,10 @@ class SkillRegistryMixin:
         organization: str = "",
     ) -> None:
         """Raises RESOURCE_DOES_NOT_EXIST when the target version does
-        not exist or is deleted, so an alias can never dangle. Any other
-        status (draft, active, deprecated) is a valid target."""
+        not exist, is deleted, or is withdrawn because it contains a
+        deleted member, so an alias can never dangle or bypass the kill
+        switch. Any other status (draft, active, deprecated) is a valid
+        target."""
         raise NotImplementedError(self.__class__.__name__)
 
     def delete_agent_plugin_alias(
@@ -1814,8 +1848,9 @@ The importer:
 
 When multiple markers exist, the standard root manifest takes precedence. The
 canonical name follows the Agent Plugins naming constraints. A supplied
-manifest version is preserved; when the manifest does not include a version,
-the user must supply one via `--version` or the `version` parameter.
+manifest version is used as the registry version (normalized to full
+SemVer); when the manifest does not include a version, the user must
+supply one via `--version` or the `version` parameter.
 
 ### Registration behavior
 

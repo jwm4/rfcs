@@ -513,6 +513,9 @@ AgentPluginVersion ||--o{ AgentPluginVersionMember : "has members"
 AgentPluginVersionMember }o--|| SkillVersion : "skill member"
 
 AgentPluginVersionMember {
+  string plugin_workspace
+  string plugin_organization
+  string plugin_name
   string plugin_version
   string member_organization
   string member_name
@@ -520,10 +523,11 @@ AgentPluginVersionMember {
 }
 ```
 
-The `AgentPluginVersionMember` fields are storage columns parsed
-from the member URI string (e.g., `skills:/@acme/code-review/1`
-decomposes into `member_organization`, `member_name`,
-and `member_version`).
+The `member_*` columns are storage fields parsed from the member URI
+string (e.g., `skills:/@acme/code-review/1` decomposes into
+`member_organization`, `member_name`, and `member_version`). The
+`plugin_*` columns identify the owning agent plugin version and come
+from that parent, not from the member URI.
 
 #### Skill
 
@@ -602,12 +606,19 @@ source metadata, lifecycle state, and optional registered-skill membership.
 The full manifest is stored in a JSON column following RFC-0004's hybrid
 `server_json` precedent. MLflow-managed fields remain outside the payload.
 
-The registry version is a string equal to `plugin_json["version"]`. A supplied
-version must be valid SemVer (or semverish, e.g., `1.0` is normalized to
-`1.0.0`). Non-SemVer version strings are rejected. When the manifest does not
-include a version, the user must supply one explicitly (e.g., via `--version`
-on the CLI or the `version` parameter in the SDK). MLflow inserts the supplied
-version into the stored payload.
+The registry version is a string equal to the stored `plugin_json["version"]`.
+A supplied version must be valid SemVer, or semverish (e.g., `1.0`), which is
+normalized to full SemVer (`1.0.0`) on creation; non-SemVer version strings are
+rejected. On ingest MLflow canonicalizes the version field: it normalizes the
+value and writes the normalized form into the stored payload, so the registry
+version and the stored `plugin_json["version"]` are always identical. This
+version field is the only part of the manifest the registry sets during ingest;
+every other field is preserved as submitted, and the stored `plugin_json` is
+immutable after creation. When the manifest does not include a version, the user
+must supply one explicitly (e.g., via `--version` on the CLI or the `version`
+parameter in the SDK), and the registry writes the normalized value into the
+payload. When both a manifest version and an explicit version are supplied, they
+must agree after normalization, otherwise the request is rejected.
 
 An assembled plugin may omit `plugin_json` entirely. In that case, the user
 must supply a `version` and the server-side registry layer synthesizes a
@@ -716,29 +727,52 @@ rather than physically removing the version row. Active versions must
 first be unpublished or deprecated before they can be deleted.
 Deleting a version also removes aliases that point to that version.
 
+Soft delete is a withdrawal that propagates to consumers. A `deleted`
+skill version is removed from standalone discovery, and it also withdraws
+every agent plugin version that contains it, whether the skill is a pinned
+member of an assembled plugin or an embedded member of a monolithic
+package. A plugin version that contains a `deleted` member is treated as
+`deleted` for resolution, discovery, and pull: it is not resolved as
+latest, is excluded from default get/search/list, and its pull fails with
+an error identifying the withdrawn member. This makes soft delete a kill
+switch for a compromised or vulnerable skill across both plugin kinds. The
+withdrawal is derived, not materialized: the containing plugin version's
+stored `status` is unchanged, so one owner's delete does not rewrite
+another owner's state. The plugin owner can publish a replacement plugin
+version that references a fixed member (moving any alias). To retire a
+member without breaking consumers, deprecate it instead: a `deprecated`
+member does not trigger withdrawal, so plugin versions that contain it
+still resolve and pull.
+
 Top-level entity delete operations (`delete_skill` and
 `delete_agent_plugin`) are administrative hard deletes that remove the
 parent and cascade to child rows, following the Model Registry
 registered-model pattern. These operations are subject to
 referential-integrity checks: a skill version referenced by an agent plugin
 version cannot be physically removed until the referencing agent plugin
-version is removed or otherwise no longer references it. Normal
-retirement should use version deprecation or version soft delete
-rather than top-level hard delete.
+version is removed or otherwise no longer references it. Routine,
+non-breaking retirement should use version deprecation, which keeps a
+pinned member resolvable; version soft delete withdraws content and is
+the kill switch described above, while top-level hard delete is reserved
+for administrative removal.
 
 #### Entity-level status
 
 `Skill.status` and `AgentPlugin.status` are read-only. They are derived from the
 same latest-resolved version used for each entity's `latest_version`. Resolution
 prefers eligible `active` versions and otherwise falls back to non-`deleted`
-non-`active` versions. Deleted versions never drive parent status. When an
-entity has no non-`deleted` version, it has no resolved latest version: both
-`status` and `latest_version` are `None`.
+non-`active` versions. Deleted versions never drive parent status, and for
+agent plugins a version withdrawn because it contains a `deleted` member is
+likewise excluded. When an entity has no resolvable version, neither
+`deleted` nor, for agent plugins, withdrawn, it has no resolved latest
+version: both `status` and `latest_version` are `None`.
 
 #### `latest_version` resolution
 
 Skill version numbers are server-assigned monotonic integers. Each new
-version for a given skill receives the next integer.
+version for a given skill receives the next integer, computed atomically
+as one more than the highest number ever assigned to the skill;
+soft-deleted versions keep their numbers, so numbers are never reused.
 `get_latest_skill_version(name, organization)` returns the highest
 version number among `active` versions if one exists, otherwise the
 highest version number among non-`deleted` non-`active` versions. If the
@@ -754,7 +788,17 @@ Setting an alias requires the target version to exist and not be
 missing or deleted target so an alias can never dangle. An alias may
 point at a `draft`, `active`, or `deprecated` version: pointing an alias
 at a version is an explicit choice, so it resolves regardless of status.
-Deleting a version continues to remove any aliases that point to it.
+That "regardless of status" rule covers the target's own lifecycle status,
+not a withdrawn version. For agent plugins, a version withdrawn because it
+contains a `deleted` member (see the withdrawal rule under Per-version
+status) is treated as `deleted` for alias purposes too: it is not a valid
+target for
+`set_agent_plugin_alias`, and an existing alias that points to it stops
+resolving while it is withdrawn, so an alias cannot bypass the kill
+switch. (Only agent plugin versions can be withdrawn this way; skill
+versions have no members, so a `set_skill_alias` target is excluded only
+when it is itself `deleted`.) Deleting a version continues to remove any
+aliases that point to it.
 
 The alias name `latest` is reserved:
 `set_skill_alias(name, alias="latest", organization, ...)` is
@@ -768,8 +812,12 @@ to `plugin_json["version"]`. All versions are valid SemVer (semverish inputs
 are normalized on creation). Among eligible `active` versions, semantic
 precedence selects `latest`. Creation time breaks equal SemVer precedence,
 such as versions that differ only in build metadata. When there is no active
-version, the same rule applies to non-`deleted` non-`active` candidates. If the
-plugin has no non-`deleted` version, there is no latest version and
+version, the same rule applies to non-`deleted` non-`active` candidates. A
+version withdrawn because it contains a `deleted` member (see the
+withdrawal rule under Per-version status) is excluded from resolution
+candidates in the same way as a `deleted` version. If the plugin has no
+version that is neither `deleted`
+nor withdrawn, there is no latest version and
 `get_latest_agent_plugin_version` raises `RESOURCE_DOES_NOT_EXIST`.
 
 The reserved alias behavior also applies to agent plugins:
@@ -903,7 +951,13 @@ directory tree for `mlflow`. For an assembled plugin
 `source` to `skills/<member-name>/` under the destination, matching the
 Agent Plugins `skills/*/SKILL.md` discovery layout. If a skill member in
 an assembled agent plugin has no `source`, the pull fails rather than
-producing a partial local agent plugin. In all cases, the stored
+producing a partial local agent plugin. A plugin version is also not
+pullable while it contains a `deleted` member, whether a pinned member of
+an assembled plugin or an embedded member of a monolithic package: the
+pull fails and the error identifies the withdrawn member rather than
+serving withdrawn content, per the withdrawal rule under Per-version
+status. A member that is only `deprecated` still resolves and pulls. In
+all cases, the stored
 `plugin.json` manifest is written to the destination root, making the
 pulled result a conformant Agent Plugins package.
 
