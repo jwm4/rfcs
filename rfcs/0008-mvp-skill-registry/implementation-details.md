@@ -131,7 +131,7 @@ PrimaryKey: `(workspace, organization, name)`.
 | `version_minor` | `Integer` | extracted SemVer minor component |
 | `version_patch` | `Integer` | extracted SemVer patch component |
 | `plugin_json` | `JSON` | canonical Agent Plugins manifest; immutable after creation, with the version field canonicalized (normalized) on ingest |
-| `search_text` | `Text` | derived discovery projection of name, mutable parent description, organization, and the latest-resolved manifest's description, keywords, and author name |
+| `search_text` | `Text` | derived discovery projection of name, mutable parent description, organization, and this version's manifest description, keywords, and author name; parent search matches the latest-resolved version's value |
 | `source_type` | `String(20)` | server-set; `git`, `oci`, `zip`, `mlflow`, `assembled` |
 | `source` | `String(2048)` | optional pointer to agent plugin |
 | `ref` | `String(2048)` | nullable; git branch, tag, or commit |
@@ -180,6 +180,20 @@ and handled as a derived withdrawal of the containing plugin versions
 across resolution, discovery, and pull (see Deletion semantics). Skills
 and agent plugins share the same workspace;
 `plugin_workspace` is reused for the skill FK.
+
+**Member-name uniqueness.** A `UNIQUE` constraint on `(plugin_workspace,
+plugin_organization, plugin_name, plugin_version, member_name)` enforces that
+member names are distinct within an agent plugin version. The primary key alone
+does not guarantee this, because it also includes `member_organization` and
+`member_version`; those two columns are retained for the `skill_versions` FK and
+as stored data, not to distinguish rows for uniqueness. For an assembled plugin
+the pull layout writes each member to `skills/<member-name>/`, keyed on the name
+alone, so a name collision would be ambiguous on disk; for a monolithic plugin
+the embedded skills are discovered from distinct `skills/*/SKILL.md`
+directories, which are already name-unique. Because the name is the on-disk key,
+a plugin version cannot contain two skills of the same name from different
+organizations. Create requests with duplicate member names are rejected before
+insert.
 
 ### `agent_plugin_tags`
 
@@ -496,8 +510,12 @@ Agent plugin members are referenced by URI string rather than a separate
 data class. The URI format follows MLflow's `models:/name/version`
 convention:
 
+- `skills:/name` resolves to the skill's current latest version at creation
 - `skills:/name/version` pins a specific version
 - `skills:/name@alias` resolves through an alias
+
+All three forms are resolved to a concrete `member_version` at create time and
+frozen into the member row (see the member-list URI resolution note below).
 
 ```python
 @dataclass
@@ -657,8 +675,17 @@ does not exist yet.
 In agent plugin member lists, URIs appear as plain strings in `list[str]`.
 The server parses the URI into its constituent fields
 (`member_organization`, `member_name`, `member_version`)
-for storage and validation. Alias URIs are
-resolved to a concrete version at the time of the API call.
+for storage and validation. Every reference is resolved to a concrete
+`member_version` at create time and that integer is frozen into the member row:
+a pinned `skills:/name/version` reference stores the given version, a name-only
+`skills:/name` reference resolves to the skill's current latest version, and a
+`skills:/name@alias` reference resolves to the version the alias points to at
+that moment. Name-only resolution uses the standard latest-resolution rule, so
+it may select a `draft` when the skill has no `active` or `deprecated` version;
+if no version resolves, the create request fails with
+`RESOURCE_DOES_NOT_EXIST`. Because the concrete version is captured on creation,
+`member_version` is `NOT NULL` and a later change to the skill's latest version
+or alias target does not alter existing member rows.
 
 ## Store interface
 
@@ -1491,6 +1518,19 @@ all of them without requiring `OR`, which MLflow `filter_string` does not
 support. For skills the projection is derived from name and description; for
 agent plugins it is derived from the fields listed below.
 
+The two entity kinds store `search_text` in different places. A skill's
+discovery fields (name, description) all live on the parent row, so `search_text`
+is a column on the `skills` parent table. An agent plugin's discovery fields
+come mostly from the manifest, which is version-scoped, so there is no
+`search_text` column on the `agent_plugins` parent; the column lives on
+`agent_plugin_versions`, and parent search joins to the latest-resolved version
+and matches that version's `search_text`. This is why a lifecycle transition
+that changes which version resolves as latest can change the parent's free-text
+matches. Because a version's `search_text` also folds in the mutable parent
+description, updating that description recomputes `search_text` across the
+plugin's version rows, so parent search stays consistent regardless of which
+version later resolves as latest.
+
 **Skills:** the `search_text` field covers name and description. Structured
 examples include `name LIKE '%review%'`, `description LIKE '%security%'`,
 `organization = 'acme'`, `status = 'active'`, and `tags.team = 'platform'`.
@@ -1499,8 +1539,11 @@ examples include `name LIKE '%review%'`, `description LIKE '%security%'`,
 description, organization, and the latest-resolved manifest's description,
 keywords, and author name. Structured filters are the same as Skills, plus
 `member_name = 'code-review'` to find agent plugins that include a given skill.
-If a lifecycle transition changes which version resolves as latest, the
-`search_text` matches for the parent change accordingly.
+Unlike the other parent filters, which resolve against the latest version,
+`member_name` matches a plugin when any of its versions lists that member, not
+only the latest-resolved one. This makes it the discovery path for "which
+plugins depend on this skill," including plugins pinned to an older version, now
+that memberships are not a stored field on the skill.
 
 On parent search, a `status` filter matches the parent's derived status,
 resolved from the same latest-resolved version that drives `latest_version`

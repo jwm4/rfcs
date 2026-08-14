@@ -312,9 +312,10 @@ infrastructure; registry-specific trace linkage (SKILL spans,
    ```
 2. Find assembled agent plugins that include `code-review`:
    ```bash
-   mlflow skills get skills:/code-review
+   mlflow agent-plugins search --filter-string "member_name = 'code-review'"
    ```
-   The skill detail includes agent plugin memberships.
+   Memberships are discovered by searching agent plugins for the member,
+   not stored as a field on the skill.
 3. Create a new version of the agent plugin with the updated member:
    ```bash
    mlflow agent-plugins create-version agent-plugins:/pr-workflow \
@@ -345,7 +346,8 @@ infrastructure; registry-specific trace linkage (SKILL spans,
    mlflow skills get skills:/code-review
    ```
    **UI path:** Click a card to open the detail view with metadata,
-   version history, aliases, tags, and agent plugin memberships.
+   version history, aliases, and tags. To see which agent plugins include
+   the skill, search agent plugins by member name.
 4. Inspect a specific version's source and metadata:
    ```bash
    mlflow skills get-version skills:/code-review/1
@@ -630,7 +632,22 @@ agent plugin version therefore has a complete `plugin_json`.
 Skill members are referenced by URI string following the
 `models:/name/version` convention:
 `skills:/name` (name only), `skills:/name/version` (pinned version), or
-`skills:/name@alias` (alias resolution).
+`skills:/name@alias` (alias resolution). All three forms are resolved to a
+concrete version at creation time and frozen into the stored member record: a
+name-only reference resolves to the skill's current latest version, and an
+alias reference resolves to the version the alias points to. Membership is
+therefore always pinned to a specific version, even when the reference did not
+name one, so a later change to the skill's latest version or alias target does
+not alter an existing plugin version's members. Member names must be unique
+within an agent plugin version: two members cannot share a name, regardless of
+their organization or version. For an assembled plugin this is because pull
+writes each member to `skills/<member-name>/`, keyed on the name alone, so a
+collision would be ambiguous on disk; for a monolithic plugin the embedded
+skills are discovered from distinct `skills/*/SKILL.md` directories, which are
+already name-unique. A create request with duplicate member names is rejected. A
+consequence is that a single plugin version cannot assemble two skills that
+share a name from different organizations; compose them under distinct names or
+as separate plugins.
 An agent plugin version is one of two kinds:
 
 - **Assembled:** captures member references for individual skills.
@@ -958,8 +975,14 @@ pull fails and the error identifies the withdrawn member rather than
 serving withdrawn content, per the withdrawal rule under Per-version
 status. A member that is only `deprecated` still resolves and pulls. In
 all cases, the stored
-`plugin.json` manifest is written to the destination root, making the
-pulled result a conformant Agent Plugins package.
+`plugin.json` manifest is written to the destination root. For an assembled
+plugin the members are laid out as `skills/<member-name>/`, so the pulled
+result is a conformant Agent Plugins package. For a monolithic plugin the
+packaged tree is written as stored: it is a conformant Agent Plugins package
+when the stored tree already followed the `skills/*/SKILL.md` layout, but a
+package whose tree does not (for example, a Claude Code import or a directly
+registered source) keeps its original internal layout, so the pulled result
+reflects the source tree rather than a guaranteed Agent Plugins layout.
 
 `pull` is harness-agnostic. It downloads content but does not generate
 harness-specific manifests or place files in harness-specific
@@ -985,7 +1008,7 @@ permissions from their parent entity.
 
 | Permission | Operations |
 |---|---|
-| `READ` | Search entities, get versions, resolve aliases, list tags and memberships |
+| `READ` | Search entities (including finding agent plugins by member), get versions, resolve aliases, list tags |
 | `EDIT` | Create entities, create versions, set tags, update description, status transitions (activate, deprecate), set aliases. Mapped to `can_update` in MLflow's permission framework. |
 | `MANAGE` | Delete aliases, delete tags, soft-delete versions, hard-delete entities, manage permissions. Mapped to `can_delete` in MLflow's permission framework. |
 
@@ -1000,13 +1023,16 @@ Registry (RFC-0004).
 The Skills page lives under the GenAI workflow in the MLflow sidebar,
 alongside Experiments, Prompts, MCP Servers, and AI Gateway. It
 provides list and detail views for skills and agent plugins. The list view
-supports structured filtering by status, organization, tags, source type, and
-membership where applicable. A separate free-text search input covers
-user-visible discovery metadata: Skill name and description; and Agent Plugin
+supports structured filtering by status, organization, tags, source type, and,
+for agent plugins, membership (by member name). A separate free-text search
+input covers user-visible discovery metadata: Skill name and description; and
+Agent Plugin
 name, parent description, resolved manifest description, manifest keywords,
 manifest author name, and organization. Manifest keywords remain distinct from
-mutable MLflow tags. Detail views show
-metadata, version history, aliases, tags, and agent plugin memberships.
+mutable MLflow tags. Detail views show metadata, version history, aliases, and
+tags; an agent plugin's detail also lists its skill members. To find which
+agent plugins include a given skill, search agent plugins by member name rather
+than reading a stored field on the skill.
 Because manifest search metadata comes from the latest-resolved version,
 lifecycle changes that alter which version resolves as latest may also change
 the parent agent plugin's free-text search matches.
