@@ -63,8 +63,9 @@ The two entity types are:
 
 **Minimize required inputs.** The CLI and API infer optional fields
 from source content when possible, so the simplest invocation requires
-only what cannot be derived. For example, `source_type` is inferred
-from the source URL, and `name` can be extracted from the skill's
+only what cannot be derived. For example, `source_type` is inferred by
+the server (from the source value for external pointers, and from the
+creation flow otherwise), and `name` can be extracted from the skill's
 SKILL.md entry point. Inference happens server-side to keep SDKs thin
 and portable across languages.
 
@@ -142,7 +143,7 @@ mlflow.genai.register_agent_plugin(
 ```bash
 mlflow agent-plugins import \
     --source https://github.com/acme/plugins.git \
-    --ref v1.0.0 --subpath pr-workflow
+    --ref v1.0.0 --subpath release-suite
 ```
 
 MLflow auto-detects a standard Agent Plugins package before falling back to the
@@ -257,7 +258,7 @@ infrastructure; registry-specific trace linkage (SKILL spans,
    ```bash
    mlflow agent-plugins import \
        --source https://github.com/acme/plugins.git \
-       --ref v1.0.0 --subpath pr-workflow
+       --ref v1.0.0 --subpath release-suite
    ```
 2. MLflow fetches the source to a temporary directory in the client
    environment and auto-detects the input format. A recognized root
@@ -286,12 +287,12 @@ infrastructure; registry-specific trace linkage (SKILL spans,
    ```bash
    mlflow agent-plugins import \
        --source https://github.com/acme/plugins.git \
-       --ref v2.0.0 --subpath pr-workflow
+       --ref v2.0.0 --subpath release-suite
    ```
 2. MLflow uses the incoming manifest version (or the user-supplied
    `--version`) and rejects the import if that agent plugin version
    already exists. It looks up
-   the most recently created prior version of the `pr-workflow` agent
+   the most recently created prior version of the `release-suite` agent
    plugin and compares discovered skill names against the
    member skill names in its member list.
 3. Skills whose names match existing members get new versions of
@@ -548,8 +549,9 @@ the API or store layer.
 
 #### SkillVersion
 
-A versioned record containing a typed source pointer (`git`, `oci`,
-`zip`, or `mlflow`), status, and tags. The `(workspace, organization, name, version)` tuple
+A versioned record containing a server-set `source_type` (`git`, `oci`,
+`zip`, `mlflow`, or `embedded`), an optional typed source pointer for
+external content, status, and tags. The `(workspace, organization, name, version)` tuple
 is unique. Source pointers and version numbers are
 immutable after creation; to point to different content, register a
 new version. The optional `subpath` field identifies content within a
@@ -623,12 +625,21 @@ An agent plugin version is one of two kinds:
 - **Assembled:** captures member references for individual skills.
   Each skill version has its own source. `pull` fetches members
   individually.
-- **Monolithic:** has its own source pointer (e.g., a single OCI
-  image or Git repo containing a complete Agent Plugins package) and member
+- **Monolithic:** has its own package containing a complete Agent Plugins
+  package, either an external source pointer (e.g., a single OCI image or
+  Git repo) or a tree stored in MLflow artifact storage, plus member
   references. Skill member versions may omit their own sources when
   their content lives inside the agent plugin; these embedded members
   are referenced by name and are not individually addressable within
   the package. `pull` fetches the agent plugin as a unit.
+
+A version's kind is derived from its `source_type`: `assembled` is an
+assembled plugin, and any external or MLflow-stored package
+(`git`, `oci`, `zip`, `mlflow`) is monolithic. An agent plugin's kind is
+fixed across its versions: every version of a given agent plugin must be
+the same kind, and the server rejects a new version whose kind differs
+from the existing versions. (A single name such as `pr-workflow` is
+therefore either always assembled or always monolithic, never both.)
 
 An agent plugin version cannot have both an agent plugin-level source
 and skill member versions with their own sources. This avoids
@@ -845,29 +856,37 @@ from the source system to the caller's local filesystem. The registry
 server is not involved in content transfer. `pull` is
 source-type-aware:
 
-| Source type | Pull behavior |
+| `source_type` | Pull behavior |
 |---|---|
 | `git` | `git clone` or `git archive` of the referenced path/ref |
 | `oci` | `oci pull` of the referenced image/tag; if `subpath` is set, extract only that path from the image |
 | `zip` | HTTP download and extract; if `subpath` is set, extract only that path from the archive |
 | `mlflow` | Download the version's MLflow-managed artifact directory tree using the same artifact APIs and credentials as other MLflow artifact operations |
+| `embedded` | Not standalone-pullable; the content lives inside a monolithic agent plugin. Pull returns an error directing the caller to pull the containing agent plugin |
+| `assembled` | Agent plugin versions only; pull each member individually from its own `source` (see agent plugin pull below) |
 
-**Single skill pull.** Fetches the content at the skill version's
-`source` to the destination directory. If `subpath` is set, only the
-content at that path within the artifact is extracted. Returns an
-error if the skill version has no source; source-less embedded skill
-versions are pullable only through their containing monolithic
-agent plugin.
+**Single skill pull.** Routing is by `source_type`, not by the presence
+of `source`. For `git`, `oci`, and `zip`, the client fetches the content
+at the skill version's `source` to the destination directory; if
+`subpath` is set, only the content at that path within the artifact is
+extracted. For `mlflow`, the client downloads the version's artifact
+directory tree from the path derived from identity (there is no `source`
+pointer). For `embedded`, pull returns an error: embedded skill versions
+have no standalone content and are pullable only through their containing
+monolithic agent plugin.
 
-**Agent plugin pull.** For monolithic agent plugins, fetch the agent plugin
-artifact as a single unit to the destination directory. For assembled
-agent plugins, pull each member individually from its own `source` to
-`skills/<member-name>/` under the destination, matching the Agent Plugins
-`skills/*/SKILL.md` discovery layout. If a skill member in an assembled
-agent plugin has no `source`, the pull fails rather than producing a
-partial local agent plugin. In both cases, the stored `plugin.json`
-manifest is written to the destination root, making the pulled result a
-conformant Agent Plugins package.
+**Agent plugin pull.** Routing follows the version's kind, which is
+derived from `source_type`. For a monolithic plugin, fetch the plugin
+package as a single unit to the destination directory: from the plugin's
+`source` for `git`/`oci`/`zip`, or by downloading the plugin's artifact
+directory tree for `mlflow`. For an assembled plugin
+(`source_type="assembled"`), pull each member individually from its own
+`source` to `skills/<member-name>/` under the destination, matching the
+Agent Plugins `skills/*/SKILL.md` discovery layout. If a skill member in
+an assembled agent plugin has no `source`, the pull fails rather than
+producing a partial local agent plugin. In all cases, the stored
+`plugin.json` manifest is written to the destination root, making the
+pulled result a conformant Agent Plugins package.
 
 `pull` is harness-agnostic. It downloads content but does not generate
 harness-specific manifests or place files in harness-specific
