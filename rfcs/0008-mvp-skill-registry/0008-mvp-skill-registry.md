@@ -292,11 +292,14 @@ infrastructure; registry-specific trace linkage (SKILL spans,
 2. MLflow uses the incoming manifest version (or the user-supplied
    `--version`) and rejects the import if that agent plugin version
    already exists. It looks up
-   the most recently created prior version of the `release-suite` agent
-   plugin and compares discovered skill names against the
+   the most recently created non-`deleted` prior version of the
+   `release-suite` agent plugin and compares discovered skill names against the
    member skill names in its member list.
 3. Skills whose names match existing members get new versions of
-   those skills. New names become new skills. Members whose
+   those skills. A new name creates a new embedded skill when the name is free
+   in the organization, adds a version when this same plugin already owns the
+   name, and is rejected when the name is owned by a standalone skill or a
+   different monolithic plugin. Members whose
    names are no longer in the source are omitted from the new
    agent plugin version.
 4. A new agent plugin version is created with the updated member
@@ -555,7 +558,15 @@ name) and defaults to `""` (empty string) when not specified.
 Key fields include `name` (unique within workspace and
 organization), `description`,
 `status` (read-only, derived from the parent-resolved version),
-`latest_version` (read-only, highest active version number), and `aliases`.
+`latest_version` (read-only, highest active version number), `aliases`, and
+`owner_plugin_name` (read-only; the owning monolithic plugin for an embedded
+skill, empty for a standalone skill).
+A skill name is owned by exactly one entity within its `(workspace,
+organization)`: a standalone skill or a single monolithic plugin whose import
+embedded it. Monolithic import and standalone registration both reject a name
+already owned by a different entity, so within `(workspace, organization)` a
+skill name never has two owners (an embedded skill and a standalone skill, or
+two different monolithic plugins, can never share a name).
 
 **UI fallback behavior**: for version-level fields shown on parent
 cards (e.g., `source_type`),
@@ -577,8 +588,9 @@ new version. The optional `subpath` field identifies content within a
 shared artifact (used with Git, OCI, and ZIP).
 
 `register_skill()` creates the parent Skill when needed (with null
-`description`) and otherwise reuses the existing parent. To set
-parent-level metadata, use `create_skill()` before registering
+`description`) and otherwise reuses the existing parent, except that it fails
+when the name is owned by an embedded skill (see the ownership rule above). To
+set parent-level metadata, use `create_skill()` before registering
 versions or `update_skill()` afterward. If the target
 `(workspace, organization, name, version)` already exists,
 registration fails with an error.
@@ -727,7 +739,7 @@ stateDiagram-v2
 
 | State | Meaning | Downstream surfacing |
 |---|---|---|
-| `draft` | Registered but not yet marked ready for general use | Reachable by an explicit version or alias; not preferred by latest resolution, which surfaces a draft only when no `active` or `deprecated` version exists |
+| `draft` | Registered but not yet marked ready for general use | Reachable by an explicit version or alias; never preferred by latest resolution while an `active` version exists, but when no `active` version exists it can win `latest` if it is the highest non-`deleted` non-`active` version |
 | `active` | Ready for downstream use | Surfaced to discovery and consumers |
 | `deprecated` | Still functional but no longer recommended | Surfaced with deprecation signal |
 | `deleted` | Soft-deleted; preserved internally for history, no longer active | Not surfaced by normal get/search/list APIs |
@@ -744,10 +756,12 @@ Allowed transitions:
 
 `draft` allows a version to be registered and reviewed before it is
 recommended to consumers. A draft is still reachable by an explicit
-version pin or alias, so a publisher can share it for review, and it is
-not preferred by latest resolution: latest resolves to a draft only when
-the entity has no `active` or `deprecated` version (for example, a
-brand-new entity whose first version is still a draft). `active` can
+version pin or alias, so a publisher can share it for review, and it
+never wins latest resolution while an `active` version exists. When the
+entity has no `active` version, a draft can still resolve `latest` if it
+is the highest non-`deleted` non-`active` version (for example, a
+brand-new entity whose first version is still a draft, or a newer draft
+that outranks an older `deprecated` version). `active` can
 return to `draft` (unpublish) for cases where a version needs to be
 pulled back for further review.
 `deprecated` can return to `active` (re-activate) for cases where a
@@ -782,7 +796,9 @@ parent and cascade to child rows, following the Model Registry
 registered-model pattern. These operations are subject to
 referential-integrity checks: a skill version referenced by an agent plugin
 version cannot be physically removed until the referencing agent plugin
-version is removed or otherwise no longer references it. Routine,
+version is removed or otherwise no longer references it. An embedded skill
+cannot be hard-deleted on its own; it is removed only when its owning
+monolithic plugin is hard-deleted, which also frees its name for reuse. Routine,
 non-breaking retirement should use version deprecation, which keeps a
 pinned member resolvable; version soft delete withdraws content and is
 the kill switch described above, while top-level hard delete is reserved
@@ -934,10 +950,13 @@ into another agent plugin format.
 When importing a source into an agent plugin that already has previous
 versions, import matches discovered skills to existing members by
 comparing each discovered skill's name against the member skill names
-in the most recently created agent plugin version's member
+in the most recently created non-`deleted` agent plugin version's member
 list. A matching name creates a new version of the existing skill.
-A new name (not in the previous version) creates a new skill
-with its own next server-assigned integer version. A previous
+For a new name (not in the previous member list), import creates a new embedded
+skill owned by this plugin when the name is free, adds a version when this same
+plugin already owns the name (for example, a member removed earlier and now
+reintroduced), and is rejected when the name is owned by a standalone skill
+or a different monolithic plugin. A previous
 member whose name no longer appears in the source is omitted from
 the new agent plugin version but remains in the registry. A skill that
 is renamed between versions is treated as a removed skill and a new one.

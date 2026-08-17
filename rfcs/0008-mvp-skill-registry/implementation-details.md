@@ -19,6 +19,7 @@ workspace-scoped.
 | `organization` | `String(256)` | PK, default `''` (empty string) |
 | `name` | `String(256)` | PK |
 | `description` | `String(5000)` | |
+| `owner_plugin_name` | `String(256)` | ownership marker; empty for standalone skills, the owning monolithic plugin's name for embedded skills |
 | `search_text` | `Text` | derived discovery projection of name and description |
 | `created_by` | `String(256)` | |
 | `last_updated_by` | `String(256)` | |
@@ -26,6 +27,17 @@ workspace-scoped.
 | `last_updated_timestamp` | `BigInteger` | millis since epoch |
 
 PrimaryKey: `(workspace, organization, name)`.
+
+A skill name is owned by exactly one entity within its `(workspace,
+organization)`: either a standalone skill (`owner_plugin_name` empty) or a
+single monolithic plugin (`owner_plugin_name` set to that plugin's name, which
+is unambiguous because the owning plugin is always in the skill's own
+`(workspace, organization)`). `owner_plugin_name` records which entity may
+create further versions of the name; it is not part of the primary key, so it
+does not propagate to `skill_versions`, tags, or aliases. Monolithic import and
+standalone registration read it to enforce this ownership (see Registration
+behavior). It records ownership, not plugin membership: which plugins reference a
+skill is still discovered by search, never read from this field.
 
 ### `skill_versions`
 
@@ -251,6 +263,13 @@ used by the Model Registry and RFC-0004:
   `delete_agent_plugin`) are administrative hard deletes. They
   physically remove the parent row and cascade to child rows, subject
   to referential-integrity checks.
+- Hard-deleting a monolithic agent plugin also hard-deletes the embedded
+  skills it owns (those whose `owner_plugin_name` names that plugin), since an
+  embedded skill has no standalone existence outside its container. This frees
+  the owned name for reuse by a later import or a standalone skill. Standalone
+  skills and skills owned by a different plugin are untouched. Embedded skills
+  are not independently hard-deletable; they are removed only with their
+  owning plugin.
 - Version delete operations (`delete_skill_version` and
   `delete_agent_plugin_version`) are soft deletes. They set
   `status='deleted'` when allowed by the lifecycle transition rules,
@@ -293,6 +312,7 @@ class Skill:
     name: str
     organization: str = ""
     description: str | None = None
+    owner_plugin_name: str = ""  # read-only; owning monolithic plugin for an embedded skill, empty for standalone
     workspace: str | None = None
     status: SkillStatus | None = None  # read-only, derived from parent-resolved version
     tags: dict[str, str] = field(default_factory=dict)
@@ -309,6 +329,7 @@ class Skill:
 | `name` | `str` | Human-readable name, unique within `(workspace, organization)` |
 | `organization` | `str` | Scopes ownership (e.g., team or publisher); defaults to `""` (empty string) |
 | `description` | `str` | Optional human-readable description of the skill |
+| `owner_plugin_name` | `str` | Read-only; name of the owning monolithic plugin for an embedded skill, empty for a standalone skill |
 | `status` | `SkillStatus \| None` | Read-only; derived from the parent-resolved version: highest active version number if present, otherwise highest non-deleted non-active version number. `None` when the skill has no non-`deleted` version |
 | `aliases` | `dict[str, int]` | Stable version pointers (e.g., `{"production": 2}`); read-only, populated from `skill_aliases` table |
 | `latest_version` | `int \| None` | Read-only; highest version number among `active` versions if one exists, otherwise highest non-`deleted` non-`active` version. `None` when the skill has no non-`deleted` version |
@@ -440,13 +461,16 @@ MLflow artifact storage rather than treating it as a remote pointer:
    path can be registered.
 2. The client creates the `SkillVersion` with `source` set to null and
    `status="draft"`, regardless of the caller's requested final status.
-   The server assigns the version number and infers
-   `source_type="mlflow"` from the null source. Because a draft is not
-   preferred by latest resolution over an existing `active` or
-   `deprecated` version, an in-flight upload never displaces the currently
-   recommended version. (When the entity has no other version, latest
-   resolution may surface the in-flight draft; it carries `status="draft"`
-   and is discarded if the upload fails, per step 4.)
+   The server assigns the version number and sets
+   `source_type="mlflow"` for this standalone-upload flow (a null source
+   created outside monolithic import, which instead yields `embedded`).
+   Because a draft is not
+   preferred by latest resolution while an `active` version exists, an
+   in-flight upload never displaces an `active` recommended version. (When
+   the entity has no `active` version, latest resolution may surface the
+   in-flight draft, since it is the highest-numbered non-`deleted` version;
+   it carries `status="draft"` and is discarded if the upload fails, per
+   step 4.)
 3. Using the returned version number, the client uploads each file
    through MLflow's existing artifact APIs to the controlled artifact
    prefix (`skills/@<organization>/<name>/<version>/`, with the
@@ -685,8 +709,9 @@ a pinned `skills:/name/version` reference stores the given version, a name-only
 `skills:/name` reference resolves to the skill's current latest version, and a
 `skills:/name@alias` reference resolves to the version the alias points to at
 that moment. Name-only resolution uses the standard latest-resolution rule, so
-it may select a `draft` when the skill has no `active` or `deprecated` version;
-if no version resolves, the create request fails with
+it may select a `draft` when the skill has no `active` version and the draft is
+its highest-numbered non-`deleted` version; if no version resolves, the create
+request fails with
 `RESOURCE_DOES_NOT_EXIST`. Because the concrete version is captured on creation,
 `member_version` is `NOT NULL` and a later change to the skill's latest version
 or alias target does not alter existing member rows.
@@ -1053,7 +1078,8 @@ def register_skill(
     """Register a skill version. The server assigns the next
     monotonic integer version. Auto-creates the parent Skill if
     it does not exist (with null description) and otherwise reuses
-    the existing parent. To set parent-level metadata, use
+    the existing parent; fails if the name is owned by an embedded
+    skill (a monolithic plugin's member). To set parent-level metadata, use
     MlflowClient.create_skill() before registering versions or
     MlflowClient.update_skill() afterward. This matches the MCP
     Server Registry behavior
@@ -1693,6 +1719,7 @@ class SkillResponse(BaseModel):
     name: str
     organization: str = ""
     description: str | None = None
+    owner_plugin_name: str = ""
     status: str | None = None
     latest_version: int | None = None
     aliases: list[SkillAliasResponse] = Field(default_factory=list)
@@ -1873,6 +1900,9 @@ only that version. The CLI does not expose top-level hard delete of a parent
 entity: `delete_skill` and `delete_agent_plugin` are administrative operations
 available through the SDK (`MlflowClient`) and REST only, and are intentionally
 omitted from the CLI to keep destructive cascade deletes off the command line.
+`delete_skill` rejects an embedded skill (one whose `owner_plugin_name` is set);
+an embedded skill is removed only when `delete_agent_plugin` hard-deletes its
+owning monolithic plugin, which also frees the name.
 
 **Relationship to existing `mlflow skills` subcommands.** MLflow already
 has `mlflow skills list` and `mlflow skills view` subcommands
@@ -1930,11 +1960,26 @@ name from its `SKILL.md` and rejects the package if two skills resolve to the
 same name, since member names must be unique within the resulting agent plugin
 version (see Member-name uniqueness). Directory paths under `skills/*/` are not
 used as the uniqueness key, because a skill's name is declared in `SKILL.md`
-rather than taken from its directory.
+rather than taken from its directory. Each derived name, whether read from
+`SKILL.md` or synthesized by a Claude Code or generic adapter, is validated
+against the skill `name` rule (see Name and organization validation); import
+fails on an invalid derived name rather than silently rewriting it, so a name
+that would be illegal for a standalone skill cannot enter the registry through
+import.
+
+The importer also enforces skill-name ownership within `(workspace,
+organization)`. On a first import, each discovered name must be free: if the
+name already belongs to a standalone skill or to a different monolithic plugin,
+the import is rejected rather than adding an embedded version to another owner's
+skill. Standalone skill creation (`register_skill`/`create_skill`) is
+symmetric: it fails if the name is already owned by an embedded skill. This
+keeps a skill name bound to a single owner, so an embedded skill and a
+standalone skill can never share a name in the same organization.
 
 For each discovered skill, the importer creates a `SkillVersion` whose
 version is server-assigned, whose `source` is `None` (no typed source
-class, no `ref`), and whose `source_type` the server sets to `embedded`.
+class, no `ref`), and whose `source_type` the server sets to `embedded`. The
+parent `Skill` records `owner_plugin_name` set to the importing plugin's name.
 The importer references each embedded skill by name in
 the member list (e.g., `skills:/embedded-review/1`).
 
@@ -1954,13 +1999,20 @@ member list.
 When the target agent plugin already has at least one version, import first
 rejects an incoming canonical version that already exists. It then
 matches discovered skills to existing members by name, using the
-member skill names from the most recently created agent plugin version's member list:
+member skill names from the most recently created non-`deleted` agent plugin
+version's member list (a soft-deleted latest version is skipped so matching
+reflects the plugin's current effective members):
 
 1. **Matching name:** The discovered skill's name matches a member name
    in the previous member list. Import
    creates a new version of that existing skill.
-2. **New name:** The name does not match any previous member.
-   Import creates a new skill with its own next server-assigned integer version.
+2. **New name:** The name does not match any previous member. If the name is
+   free within the organization, import creates a new embedded skill owned by
+   this plugin, with its own next server-assigned integer version. If the name
+   is already owned by this same plugin (for example, a member removed in an
+   earlier version and now reintroduced), import adds a new version to that
+   existing skill. If the name is owned by a standalone skill or a different
+   monolithic plugin, the import is rejected.
 3. **Removed name:** A previous member's name is not found in the
    new source. The member is omitted from the new agent plugin version.
    The skill and its existing versions remain in the registry.
