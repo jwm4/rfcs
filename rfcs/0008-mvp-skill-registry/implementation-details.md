@@ -939,6 +939,29 @@ class SkillRegistryMixin:
     ) -> AgentPluginVersion:
         raise NotImplementedError(self.__class__.__name__)
 
+    def import_agent_plugin(
+        self,
+        name: str,
+        organization: str = "",
+        version: str | None = None,
+        plugin_json: dict[str, Any] | None = None,
+        embedded_skills: list[dict[str, Any]] | None = None,
+        source_type: str | None = None,
+        source: str | None = None,
+        ref: str | None = None,
+        subpath: str | None = None,
+        status: str = "active",
+    ) -> AgentPluginVersion:
+        """Register a monolithic agent plugin as a single unit of work. For each
+        entry in embedded_skills (a name plus optional description and keywords),
+        create the owning Skill when the name is free or add a version when this
+        plugin already owns it, set owner_plugin_name and search_text, then
+        create the monolithic AgentPluginVersion referencing every embedded
+        skill by name. All of it commits in one database transaction or none of
+        it does. A store that cannot provide a single-transaction unit of work
+        raises NotImplementedError rather than applying the import partially."""
+        raise NotImplementedError(self.__class__.__name__)
+
     def get_agent_plugin_version(
         self, name: str, version: str,
         organization: str = "",
@@ -1184,7 +1207,9 @@ def import_plugin(
     adapter cannot derive a name. version is required when the detected
     manifest does not contain a version field. A typed source class
     (GitSource, OCISource, ZipSource) is converted to flat REST fields; a
-    plain string is also accepted for convenience.
+    plain string is also accepted for convenience. Fetching and inspection
+    are client-side; the embedded skills and the plugin version are then
+    created atomically by the server via the POST /import endpoint.
     """
 
 
@@ -1301,6 +1326,24 @@ class MlflowClient:
         """version is required when plugin_json is None or when
         plugin_json does not contain a version field."""
 
+    def import_agent_plugin(
+        self,
+        *,
+        name: str,
+        organization: str = "",
+        version: str | None = None,
+        plugin_json: dict[str, Any] | None = None,
+        embedded_skills: list[dict[str, Any]] | None = None,
+        source: GitSource | OCISource | ZipSource | str | None = None,
+        status: str = "active",
+    ) -> AgentPluginVersion:
+        """Post a client-prepared import payload to the transactional
+        import-registration endpoint. The server creates the embedded skills
+        and the monolithic plugin version atomically; source_type and
+        owner_plugin_name are server-set. Each embedded_skills entry carries a
+        name plus optional description and keywords, read from its SKILL.md
+        during local inspection."""
+
     def get_agent_plugin(self, *, name: str, organization: str = "") -> AgentPlugin: ...
 
     def search_agent_plugins(
@@ -1414,13 +1457,20 @@ or `git://` scheme = git, `oci://` scheme = oci, `.zip` = zip. The
 `source_type="oci"` and persists the bare image reference without the
 scheme, so `pull` and `introspect` operate on the native OCI reference.
 For content
-without an external pointer the server sets it from the creation flow:
-a standalone skill or a monolithic plugin package uploaded with a null
-`source` becomes `mlflow` (content stored in MLflow artifact storage);
-a skill created as a member during monolithic agent plugin import becomes
-`embedded` (the content lives inside the agent plugin package rather than
-in standalone storage); and an agent plugin version created from member
-references with no plugin-level package becomes `assembled`. Keeping
+without an external pointer the server sets it from the endpoint used, not from
+the null `source` alone: a standalone skill version uploaded through the
+ordinary creation APIs with a null `source` becomes `mlflow` (content stored in
+MLflow artifact storage); the import-registration endpoint sets `embedded` for
+the member skills it creates (their content lives inside the agent plugin
+package rather than in standalone storage) and records their
+`owner_plugin_name`, and sets `mlflow` for a monolithic package it references in
+MLflow artifact storage; and an agent plugin version created through the
+ordinary creation APIs from member references with no plugin-level package
+becomes `assembled`. Because `embedded` skills arise only
+through the import-registration endpoint, and an ordinary agent plugin request
+that carries no plugin-level package is `assembled` by definition, a null-`source`
+request to the ordinary creation APIs is unambiguous (a skill version is
+`mlflow`, an agent plugin version is `assembled`). Keeping
 `source_type` server-set keeps SDKs as thin REST wrappers, avoids
 reimplementing inference in every language, and prepares for future
 server-side content inspection (e.g., signature verification).
@@ -1432,8 +1482,10 @@ absent or does not contain a version, the request must include a `version`
 field. When both `plugin_json["version"]` and the request-level `version` are
 present, they must agree; a mismatch is rejected. The server does not fetch remote package content. Client-side
 `import_plugin()` performs source fetching, format detection, filesystem
-validation, and adapter translation before submitting the canonical payload and
-member references.
+validation, and adapter translation, then submits the canonical payload and
+member references to the transactional `POST /import` endpoint
+(`ImportRegisterRequest`), which creates the embedded skills and the monolithic
+plugin version atomically.
 
 There is no skill-registry content-upload endpoint. When `source` is
 a local path, the client creates a version record with null source to
@@ -1514,9 +1566,10 @@ All paths relative to the logical agent-plugins router prefix.
 | `POST` | `/` | Create an agent plugin |
 | `GET` | `/` | Search agent plugins |
 | `POST` | `/register` | Validate or synthesize `plugin_json`, create or reuse the parent, and create a version |
+| `POST` | `/import` | Import a monolithic plugin: atomically create the embedded skills and the plugin version from a client-prepared payload (`ImportRegisterRequest`) |
 | `GET` | `/@{organization}/{name}` | Get agent plugin by organization and name |
 | `PATCH` | `/@{organization}/{name}` | Update agent plugin fields |
-| `DELETE` | `/@{organization}/{name}` | Hard-delete agent plugin (cascades versions and memberships) |
+| `DELETE` | `/@{organization}/{name}` | Hard-delete agent plugin (cascades versions, memberships, and owned embedded skills) |
 | `POST` | `/@{organization}/{name}/versions` | Create an agent plugin version with members |
 | `GET` | `/@{organization}/{name}/versions` | Search agent plugin versions |
 | `GET` | `/@{organization}/{name}/versions/{version}` | Get a specific agent plugin version |
@@ -1667,6 +1720,30 @@ class CreateAgentPluginVersionRequest(BaseModel):
 class RegisterAgentPluginRequest(CreateAgentPluginVersionRequest):
     name: str | None = None
     organization: str = ""
+
+
+class EmbeddedSkillDefinition(BaseModel):
+    # One discovered member skill, read from its SKILL.md during local
+    # inspection. Carries the discovery metadata the server stores on the
+    # embedded Skill so it is searchable like a standalone skill; the version,
+    # source_type ("embedded"), and owner_plugin_name are all server-set.
+    name: str
+    description: str | None = None
+    keywords: list[str] | None = None
+
+
+class ImportRegisterRequest(BaseModel):
+    # Submitted after the client fetches and inspects the source locally. The
+    # server creates the embedded skills and the monolithic plugin version in
+    # one transaction; source_type and owner_plugin_name are server-set.
+    plugin_json: PluginJSONPayload
+    version: str | None = None  # required when plugin_json omits a version
+    organization: str = ""
+    embedded_skills: list[EmbeddedSkillDefinition] = Field(default_factory=list)  # discovered members with metadata
+    source: str | None = None  # external package pointer; null for an MLflow-stored package
+    ref: str | None = None
+    subpath: str | None = None
+    status: str = "active"
 
 
 class UpdateAgentPluginVersionRequest(BaseModel):
@@ -1913,10 +1990,15 @@ The registry's subcommands use different names (e.g., `register`,
 
 ## Plugin import
 
-Plugin import is implemented in the SDK and CLI layer. There is no
-dedicated REST import endpoint: the client fetches and inspects the
-source locally, then calls the existing skill and agent plugin creation APIs.
-The registry server does not fetch user-supplied plugin URLs.
+Source fetching and inspection are implemented in the SDK and CLI layer: the
+client fetches and inspects the source locally, and the registry server never
+fetches user-supplied plugin URLs. Registration itself is a single server-side
+transaction. After inspecting the source, the client submits the prepared
+canonical manifest and the discovered embedded-skill definitions to a dedicated
+import-registration endpoint, which atomically creates the embedded skill
+versions and the monolithic agent plugin version. Because the client does the
+fetching and the server receives only the already-prepared payload, this
+endpoint still does not require the server to reach user-supplied URLs.
 
 ### Read-only preview
 
@@ -1976,14 +2058,17 @@ symmetric: it fails if the name is already owned by an embedded skill. This
 keeps a skill name bound to a single owner, so an embedded skill and a
 standalone skill can never share a name in the same organization.
 
-For each discovered skill, the importer creates a `SkillVersion` whose
-version is server-assigned, whose `source` is `None` (no typed source
-class, no `ref`), and whose `source_type` the server sets to `embedded`. The
-parent `Skill` records `owner_plugin_name` set to the importing plugin's name.
-The importer references each embedded skill by name in
-the member list (e.g., `skills:/embedded-review/1`).
-
-After registering the embedded skills, the importer creates one
+The import-registration endpoint performs the following through the store's
+`import_agent_plugin` unit of work, which commits it all in a single database
+transaction. For each discovered skill, the server creates a `SkillVersion`
+whose version is server-assigned, whose `source` is `None` (no typed source
+class, no `ref`), and whose `source_type` is `embedded`; the parent `Skill`
+records `owner_plugin_name` set to the importing plugin's name and stores the
+`description` and `keywords` from the submitted `EmbeddedSkillDefinition` in its
+`search_text`, so an embedded skill is discoverable by keyword and description
+search like a standalone skill. Each embedded
+skill is referenced by name in the member list (e.g.,
+`skills:/embedded-review/1`). In the same transaction the server creates one
 monolithic `AgentPluginVersion` whose `source_type` reflects where the
 package lives: the original typed source (preserving `ref` for Git
 sources) for a `git`, `oci`, or `zip` package, or `mlflow` with a null
@@ -1993,6 +2078,14 @@ discovered skills. This preserves a pullable link to the
 complete original package while keeping registry membership limited to skills.
 A valid package with no skills creates an agent plugin version with an empty
 member list.
+
+Because the embedded skills and the plugin version are committed together, a
+failure at any step rolls the whole registration back: no embedded skill
+versions and no `owner_plugin_name` ownership locks are left behind. Import
+requires a source that already exists (an external `git`, `oci`, or `zip`
+pointer, or a package already resident in MLflow artifact storage) and preserves
+it as the plugin version's pullable pointer, so registration performs no content
+upload; the transaction is the only step that can fail.
 
 #### Re-import behavior
 
@@ -2020,8 +2113,9 @@ reflects the plugin's current effective members):
 A skill that is renamed between versions is treated as a removed skill
 and a new one.
 
-After processing all discovered skills, import creates a new
-`AgentPluginVersion` with updated member references. Previous agent
+After processing all discovered skills, the endpoint creates a new
+`AgentPluginVersion` with updated member references in the same transaction as
+the embedded skill versions it created or added. Previous agent
 plugin versions are immutable and unchanged.
 
 Agent plugin and embedded skill version sequences are independent: a plugin

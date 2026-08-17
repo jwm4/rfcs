@@ -932,12 +932,16 @@ semverish values like `1.0` to `1.0.0`) and rejects non-SemVer strings.
 Otherwise the user must supply a version explicitly (e.g., `--version` on
 the CLI). MLflow inserts the supplied version into the stored payload.
 
-The client creates embedded skill versions without individual source pointers
-and references each by name in the member list. It then
-creates a monolithic agent plugin version whose source fields preserve the
-original package location. The complete `plugin_json` is immutable after
-creation; importing an existing `(workspace, organization, name, version)`
-fails rather than overwriting it.
+After inspecting the source locally, the client submits the prepared manifest
+and the discovered embedded-skill definitions to a dedicated import-registration
+endpoint (the registry server never fetches user-supplied URLs). In one
+transaction the server creates the embedded skill versions without individual
+source pointers, references each by name in the member list, and creates a
+monolithic agent plugin version whose source fields preserve the original
+package location. Committing them together means a failure at any step leaves no
+embedded skills or ownership locks behind. The complete `plugin_json` is
+immutable after creation; importing an existing `(workspace, organization, name,
+version)` fails rather than overwriting it.
 
 Non-skill content remains in the source artifact but is not registered
 as entities or members. Root `mcp.json` is reported as recognized standard
@@ -1038,7 +1042,9 @@ should be solved at the platform level across all MLflow registries.
 The skill registry integrates with MLflow's existing permission
 framework (READ / EDIT / MANAGE), applied at the `Skill` and
 `AgentPlugin` level. Versions, tags, aliases, and memberships inherit
-permissions from their parent entity.
+permissions from their parent entity, except that an embedded skill has no
+independent ACL and is instead governed by its owning monolithic plugin (see
+below).
 
 | Permission | Operations |
 |---|---|
@@ -1048,9 +1054,20 @@ permissions from their parent entity.
 
 This follows the same pattern as the model registry and MCP Server
 Registry (RFC-0004).
-- **Creator gets MANAGE.** When a user creates an entity (skill or
-  agent plugin), they automatically receive MANAGE permission, following
-  the MLflow model registry pattern.
+- **Creator gets MANAGE.** When a user creates a standalone skill or an
+  agent plugin, they automatically receive MANAGE permission, following
+  the MLflow model registry pattern. An embedded skill created by import
+  receives no grant of its own; it is governed by its owning plugin, as
+  below.
+- **Embedded skills are governed by their owning plugin.** An embedded
+  skill has no independent ACL; READ, EDIT, and MANAGE are evaluated on
+  the monolithic agent plugin named by its `owner_plugin_name`. Reading
+  an embedded skill requires READ on the owning plugin; re-import (which
+  adds embedded skill versions) requires EDIT on it; and the delete
+  cascade that removes the embedded skills requires MANAGE on it.
+  Embedded skills have no standalone existence and are not
+  standalone-pullable, so they carry no separate permission grants of
+  their own; a single grant on the plugin governs the whole bundle.
 
 ### UI
 
