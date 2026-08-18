@@ -26,9 +26,11 @@
   - [Workspace scoping](#workspace-scoping)
   - [Permissions](#permissions)
   - [UI](#ui)
+  - [Implementation details](#implementation-details)
 - [Drawbacks](#drawbacks)
 - [Alternatives](#alternatives)
 - [Adoption strategy](#adoption-strategy)
+- [Open questions](#open-questions)
 
 # Summary
 
@@ -61,13 +63,16 @@ The two entity types are:
   preserves the complete canonical `plugin.json` manifest and may reference
   registered skills for composition and governance.
 
-**Minimize required inputs.** The CLI and API infer optional fields
+**Minimize required inputs.** The CLI and SDK infer optional fields
 from source content when possible, so the simplest invocation requires
-only what cannot be derived. For example, `source_type` is inferred by
-the server (from the source value for external pointers, and from the
-creation flow otherwise), and `name` can be extracted from the skill's
-SKILL.md entry point. Inference happens server-side to keep SDKs thin
-and portable across languages.
+only what cannot be derived. `source_type` is set by the server (from the
+source value for external pointers, and from the creation flow otherwise),
+which needs no access to the content. Content-derived fields are read from the
+skill's SKILL.md and computed by the client during local inspection and
+submitted with the request: a skill's `name` and content `digest` always, and a
+package member's `description` and `keywords` as well. The registry server never fetches a user-supplied source URL; this
+keeps skill registration consistent with agent plugin import and keeps
+fetching of untrusted URLs off the server.
 
 `mlflow skills pull` provides a harness-agnostic way to fetch
 registered content from its source.
@@ -298,15 +303,22 @@ infrastructure; registry-specific trace linkage (SKILL spans,
    the most recently created non-`deleted` prior version of the
    `release-suite` agent plugin and compares discovered skill names against the
    member skill names in its member list.
-3. Skills whose names match existing members get new versions of
-   those skills. A new name (not in this plugin's current member list) adds
-   a new version to the existing skill when the name was previously a member
-   of this same plugin (a reintroduced member, derived from the plugin's
-   member rows), creates a new skill when the name is free in the
-   organization, and is rejected when the name is already taken by another
-   entity in the organization (a standalone skill or a member of a different
-   plugin). Members whose names are no longer in the source are omitted from
-   the new agent plugin version.
+3. Each discovered skill gets a new version; import never reuses an existing
+   skill version, so every version keeps exactly one immutable,
+   package-derived source. A name that matches an existing member adds the new
+   version to that skill, with the discovered content digest recorded on it.
+   When the content is unchanged the new version shares the previous version's
+   digest, which is how a client later recognizes the member as unchanged
+   (clean diffs between agent plugin versions, and traces before and after the
+   re-import linking to the same content); the digest drives this on the read
+   side rather than causing reuse at import time. A new name (not in this
+   plugin's current member list) adds a new version to the existing skill when
+   the name was previously a member of this same plugin (a reintroduced member,
+   derived from the plugin's member rows); creates a new skill when the name is
+   free in the organization; and is rejected when the name is already taken by
+   another entity in the organization (a standalone skill or a member of a
+   different plugin). Members whose names are no longer in the source are
+   omitted from the new agent plugin version.
 4. A new agent plugin version is created with the updated member
    references. Previous versions remain unchanged.
 
@@ -671,8 +683,14 @@ Skill members are referenced by URI string following the
 `skills:/name` (name only), `skills:/name/version` (pinned version), or
 `skills:/name@alias` (alias resolution). All three forms are resolved to a
 concrete version at creation time and frozen into the stored member record: a
-name-only reference resolves to the skill's current latest version, and an
-alias reference resolves to the version the alias points to. Membership is
+name-only reference resolves to the skill's latest `active` version, and an
+alias reference resolves to the version the alias points to. Because a member is
+frozen rather than re-evaluated, name-only resolution never pins a `draft`
+(unpublished) or `deprecated` (discouraged) version; if the skill has no
+`active` version the create fails, directing the author to publish the skill or
+pin an explicit version rather than freezing a draft when the plugin is
+registered prematurely. Individual `get`/`pull`, which re-evaluate on each call,
+keep the broader latest-resolution rule. Membership is
 therefore always pinned to a specific version, even when the reference did not
 name one, so a later change to the skill's latest version or alias target does
 not alter an existing plugin version's members. Member names must be unique
@@ -830,11 +848,21 @@ an explicit `cascade` option that governs them:
   together, subject to the referential-integrity check below.
 
 In all cases these operations are subject to referential-integrity checks: a
-skill version referenced by another agent plugin version cannot be physically
-removed until the referencing agent plugin version is removed or otherwise no
-longer references it, so a cascade never breaks a different plugin that shares a
-member. A member skill can also be hard-deleted on its own through
-`delete_skill`, subject to the same check. Routine,
+skill version referenced by a live (non-`deleted`) agent plugin version cannot
+be physically removed while that reference exists. Membership rows held only by
+soft-deleted plugin versions do not block a hard delete and are purged along
+with the member. The check runs before anything is removed,
+so if a cascade would hit a member still referenced by a live plugin
+version other than the one being deleted, the whole delete fails atomically and
+nothing is removed; the operator
+clears the other reference and retries. If two plugins reference each other's
+members so that each cascade blocks the other, the operator breaks the deadlock
+by deleting one plugin without cascade first, then retrying the cascade delete
+of the other. Failing this way is less surprising than
+deleting most members and silently keeping the referenced ones, and it still
+guarantees a cascade never breaks a different live plugin that shares a member. A
+member skill can also be hard-deleted on its own through `delete_skill`, subject
+to the same check. Routine,
 non-breaking retirement should use version deprecation, which keeps a
 pinned member resolvable; version soft delete withdraws content and is
 the kill switch described above, while top-level hard delete is reserved
@@ -945,7 +973,7 @@ of required fields causes import to fail rather than silently falling back
 to a looser adapter.
 
 Before importing, users can call `mlflow agent-plugins introspect` or the SDK
-`introspect_plugin()` function to preview the detected format, canonical
+`introspect_agent_plugin()` function to preview the detected format, canonical
 manifest, skills, recognized unregistered content, and warnings. Introspection is read-only,
 accepts either a local path or a remotely accessible source, and does not
 create registry records. Import still requires a remote source so the
@@ -995,20 +1023,29 @@ When importing a source into an agent plugin that already has previous
 versions, import matches discovered skills to existing members by
 comparing each discovered skill's name against the member skill names
 in the most recently created non-`deleted` agent plugin version's member
-list. A matching name creates a new version of the existing member skill.
+list. Import never reuses an existing skill version: every discovered member
+gets a new version whose source is derived from the newly imported package, so
+each version keeps exactly one immutable source and a plugin version never
+contains a member pointing into an older package. A matching name adds the new
+version to that existing skill, with the discovered content digest recorded on
+it.
 For a name not in that current member list, the importer resolves it against the
 plugin's membership history, which the server derives from the plugin's member
 rows rather than a stored ownership field: if a skill with that name has been a
 member of any version of this same plugin (for example, a member dropped in an
 earlier version and now reintroduced), the import adds a new version to that
-skill; if the name is free across the whole organization, the import creates a
+skill; if the name is free across the
+whole organization, the import creates a
 new skill; and if the name is already taken in the organization by an entity
 that is not one of this plugin's own past members (a standalone skill or a
 member of a different plugin), the import is rejected. A previous
 member whose name no longer appears in the source is omitted from
 the new agent plugin version but remains in the registry. A skill that
 is renamed between versions is treated as a removed skill and a new one.
-This allows re-importing an updated plugin without content diffing.
+Recording the content digest on each version lets a client group versions by
+content after the fact (recognizing unchanged members across agent plugin
+versions and linking traces to the same content) without import having to reuse
+versions.
 
 See [implementation-details.md: Plugin
 import](implementation-details.md#plugin-import) for the SDK return

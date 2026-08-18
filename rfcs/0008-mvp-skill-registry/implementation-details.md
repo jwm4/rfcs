@@ -19,7 +19,7 @@ workspace-scoped.
 | `organization` | `String(256)` | PK, default `''` (empty string) |
 | `name` | `String(256)` | PK |
 | `description` | `String(5000)` | |
-| `search_text` | `Text` | derived discovery projection of name and description |
+| `search_text` | `Text` | derived discovery projection of name and description (plus member `keywords` on import) |
 | `created_by` | `String(256)` | |
 | `last_updated_by` | `String(256)` | |
 | `creation_timestamp` | `BigInteger` | millis since epoch |
@@ -48,7 +48,9 @@ uniqueness constraint to detect a name collision.
 | `source` | `String(2048)` | nullable pointer to skill content |
 | `ref` | `String(2048)` | nullable; git branch, tag, or commit |
 | `subpath` | `String(2048)` | nullable; path within the artifact |
+| `digest` | `String(64)` | content hash of the resolved skill content, computed client-side and submitted; stored and indexed but not server-verified and not used to drive import reuse (see Content digest) |
 | `status` | `String(20)` | default `'active'` |
+| `finalized` | `Boolean` | server-set; `true` on creation for external-pointer registrations (no upload phase), and `false` for a client upload until an explicit finalize marks the upload complete and flips it to `true`. Latest, alias, pull, and content resolution skip non-finalized versions, so partially uploaded in-flight content is never surfaced or retrievable |
 | `created_by` | `String(256)` | |
 | `last_updated_by` | `String(256)` | |
 | `creation_timestamp` | `BigInteger` | millis since epoch |
@@ -70,6 +72,11 @@ Ordering is a simple integer comparison.
 **Index**: `ix_skill_versions_latest_lookup` on `(workspace,
 organization, name, status, version)` supports latest-resolution
 lookups.
+
+**Digest index**: `ix_skill_versions_digest` on `(workspace,
+organization, name, digest)` supports grouping and lookup of a skill's
+versions by content, which is the digest's read-side purpose (see Content
+digest).
 
 ### `skill_tags`
 
@@ -105,10 +112,13 @@ lookups.
 **Alias integrity.** An alias `version` targets a version row under the
 same `(workspace, organization, name)` parent. Integrity is enforced by
 the application rather than by a separate database FK: `set_skill_alias`
-(and `set_agent_plugin_alias`) rejects a missing or `deleted` target, and
-because a soft-deleted row persists a plain FK could not enforce the
-not-`deleted` rule. Soft-deleting a version removes any aliases that point
-to it. Agent plugin aliases (`agent_plugin_aliases`) follow the same
+(and `set_agent_plugin_alias`) rejects a missing, `deleted`, or non-finalized
+target, and because a soft-deleted row persists a plain FK could not enforce the
+not-`deleted` rule. A non-finalized target is a client upload still in flight
+(see the `finalized` column); rejecting it keeps an alias from resolving to a
+version whose content has not finished uploading, consistent with latest, pull,
+and content resolution all skipping non-finalized versions. Soft-deleting a
+version removes any aliases that point to it. Agent plugin aliases (`agent_plugin_aliases`) follow the same
 pattern against `agent_plugin_versions.version`, and additionally reject a
 withdrawn target (a plugin version that contains a `deleted` member), so
 an alias cannot bypass the kill switch (see Deletion semantics).
@@ -183,7 +193,10 @@ plugin_version)` references `agent_plugin_versions`, CASCADE
 delete. A FK to `skill_versions` via `(plugin_workspace,
 member_organization, member_name, member_version)` enforces
 referential integrity with RESTRICT delete. The RESTRICT applies to
-physical (hard) deletion of a `skill_versions` row; it does not block a
+physical (hard) deletion of a `skill_versions` row; because membership rows
+held only by soft-deleted plugin versions are purged before the referential
+check, the RESTRICT fires only on references from live (non-`deleted`) plugin
+versions (see Deletion semantics). It does not block a
 member's soft delete (status transition to `deleted`), which is allowed
 and handled as a derived withdrawal of the containing plugin versions
 across resolution, discovery, and pull (see Deletion semantics). Skills
@@ -274,11 +287,22 @@ used by the Model Registry and RFC-0004:
     member.
   - **With cascade:** the plugin's member skills are hard-deleted along with
     the plugin, subject to the same referential-integrity checks that guard
-    any skill hard delete. A member that is still referenced by a different
-    plugin version, or otherwise fails the integrity check, is retained
-    rather than deleted, so a cascade never breaks a different plugin that
-    shares a member. Externally-sourced skills (git/oci/zip) are deleted only
-    as registry entities; their upstream content is untouched.
+    any skill hard delete. The checks run before anything is removed: if any
+    member is still referenced by a live (non-`deleted`) plugin version other
+    than the one being deleted, or otherwise fails the integrity check, the
+    entire cascade delete fails with an error naming the blocking references
+    and nothing is removed. Membership rows held only by soft-deleted plugin
+    versions do not block the cascade, and hard-deleting a member also purges
+    those stale membership rows. The operator resolves a genuine conflict (for
+    example, by deleting or re-versioning the other plugin) and retries. If two
+    plugins reference each other's members so that each cascade blocks the
+    other, the operator breaks the deadlock by deleting one plugin without
+    cascade first, then retrying the cascade delete of the other. Failing
+    atomically is less surprising than silently retaining some members while
+    deleting the rest, and it still guarantees a cascade never breaks a
+    different live plugin that shares a member.
+    Externally-sourced skills (git/oci/zip) are deleted only as registry
+    entities; their upstream content is untouched.
   MLflow-managed package content (`source_type="mlflow"`) is refcounted by
   the skill versions whose persisted `source` points into it and is retained
   until the last referencing skill version is gone, so a non-cascade delete
@@ -384,6 +408,7 @@ class SkillVersion:
     organization: str = ""
     source: GitSource | OCISource | ZipSource | None = None
     source_type: SkillSourceType | None = None
+    digest: str | None = None
     status: SkillStatus = SkillStatus.ACTIVE
 
     tags: dict[str, str] = field(default_factory=dict)
@@ -402,6 +427,7 @@ class SkillVersion:
 | `organization` | `str` | Organization scope, from parent Skill |
 | `source` | `GitSource \| OCISource \| ZipSource \| None` | Typed source descriptor for external content (git, OCI, zip). For `source_type="mlflow"`, `source` is `None` for a standalone MLflow-stored skill (the artifact path is derived from the skill's own identity by convention) and is set to the package's artifact base path for a skill created by importing an MLflow-stored packaged plugin (a self-contained internal `mlflow-artifacts:` pointer captured at import time, with `subpath` locating the skill within that tree). A skill created by importing a packaged plugin more generally carries a source derived from the package: the package's `source_type` and `source` with a `subpath` locating the skill within the package. Because an imported member's pointer is stored on the skill version itself, its content resolves without reference to any membership row. The REST API represents this as flat `source_type`, `source`, `ref`, `subpath` fields; the SDK wraps and unwraps the typed classes (an `mlflow` `source`, when set, is a plain artifact-path string rather than a typed class) |
 | `source_type` | `SkillSourceType \| None` | Server-set discriminator (`git`, `oci`, `zip`, `mlflow`), populated on responses. Clients never supply it on create; the server infers it (see the field-inference rules below). Together with `source` it determines how content is stored and how `pull` routes |
+| `digest` | `str \| None` | Content hash of the resolved skill content (the same notion as a dataset `digest`). Computed by the client during local inspection and submitted at registration and import; client-asserted and not server-verified. It identifies a version by content within a skill name. Stored, returned on get, and indexed so callers can group versions by content (clean diffs between agent plugin versions, and traces before and after a change linking to the same content); it does not drive import, which always creates a new member version (see Content digest) |
 | `status` | `SkillStatus` | Per-version lifecycle: `draft`, `active`, `deprecated`, `deleted` |
 | `aliases` | `list[str]` | Alias names currently pointing at this version (read-only, projected from alias table) |
 
@@ -443,6 +469,67 @@ sources; for `mlflow` content the `source` is a plain artifact-path string
 when set (an imported member) or null, in which case the path is derived by
 convention from the skill's identity.
 
+**Content digest.** Each version carries a `digest`, a SHA-256 hash
+(lowercase hex, 64 characters) of the resolved skill content: the `SKILL.md`
+and the files under the skill's `subpath`. The digest is computed over a
+canonical, length-delimited serialization of that content. The client collects
+the regular files under the skill root, normalizes each file's path to a POSIX
+relative path (forward-slash separators, UTF-8, Unicode NFC), and sorts the
+files by the byte value of that path. If two distinct files normalize to the
+same POSIX path (for example, names that differ only in Unicode composition),
+the client rejects the tree as ambiguous rather than choosing an order, so the
+sort key is always total and the digest is deterministic regardless of
+traversal order. It then feeds each file to the hash as
+four framed parts in order: the path's UTF-8 byte length as an unsigned 8-byte
+big-endian integer, the path bytes, the content's byte length as an unsigned
+8-byte big-endian integer, and the content bytes. The explicit lengths make the
+serialization unambiguous, so distinct trees cannot collide (for example, path
+`a` with content `bc` hashes differently from path `ab` with content `c`).
+Symbolic links and other non-regular files are excluded: a skill is expected to
+be a plain content tree, and content reached only through a symlink is not part
+of the digest. Only file
+paths and contents contribute, so the `source`/`ref`/`subpath` that locate the
+content do not affect the result. For a standalone upload whose `subpath` is
+null the serialization covers the whole uploaded skill directory. The client
+computes the digest during the same local inspection that resolves the source
+and submits it at registration and at import. The server stores the submitted
+digest but never recomputes or verifies it: for external sources (git/oci/zip)
+it never fetches the content, and for content uploaded directly to MLflow
+artifact storage it likewise records the client-asserted value rather than
+rehashing the bytes, keeping the digest uniformly client-asserted across every
+source type and trusted the same way the client-submitted `name` and member
+`description`/`keywords` are.
+This mirrors the dataset `digest` concept already in MLflow: a hash that
+identifies a version by content within a given skill name, independent of
+where the content came from. Because it is content-only, the same bytes reached
+through different sources (for example, the same skill fetched directly versus
+discovered inside a package) produce the same digest.
+
+The digest is a passive identity field: the registry stores it, returns it on
+get, and indexes it, but never uses it to change what a write does. In
+particular, import never consults the digest to reuse an existing skill version.
+Every discovered member skill gets a new server-assigned version whose `source`
+is derived from the newly imported package, so a version always has exactly one
+immutable source and a plugin version never contains a member that points into a
+different (older) package. This keeps the model coherent with one immutable
+source per version, at the cost of a new member version on every re-import even
+when a skill's content is unchanged.
+
+The digest's value is entirely on the read side, where it is the join key for
+grouping versions by content. Because the digest is client-asserted and not
+server-verified, two skill versions with the same digest were asserted by their
+registering clients to hold identical content; the registry does not itself
+guarantee byte-for-byte identity. A consumer that trusts its own registration
+pipeline can therefore treat an equal digest as equal content, for example to
+show a clean diff between two agent plugin versions (unchanged members share a
+digest even though their versions differ) or to recognize a trace recorded
+before a re-import and one recorded after as exercising the same content. The
+registry exposes the field and indexes it so these comparisons are cheap; it does
+not itself build any diff or trace-linking feature on top of the field, and this
+RFC does not commit to one. When a version's digest is absent, it
+simply does not participate in digest grouping. The digest also serves as an
+integrity check that a pulled tree matches what was registered.
+
 **MLflow artifact storage (`source_type="mlflow"`).** In addition to
 external source pointers, the registry supports storing skill content
 directly in MLflow's artifact storage. This serves users who do not
@@ -480,7 +567,7 @@ resolved from the skill's membership or from the skill's own identity:
 even after the containing plugin is deleted, the surviving skill still
 carries an explicit pointer to the retained tree. Pulling such a skill
 fetches only the content under `subpath` from that package tree. Because
-several member skills (and re-imports) can point into the same stored tree,
+several member skills can point into the same stored tree,
 the tree is refcounted by the skill versions whose `source` names it and is
 retained until the last such skill version is gone. A non-cascade
 `delete_agent_plugin` that leaves members therefore also leaves the stored
@@ -496,24 +583,34 @@ MLflow artifact storage rather than treating it as a remote pointer:
    path can be registered.
 2. The client creates the `SkillVersion` with `source` set to null and
    `status="draft"`, regardless of the caller's requested final status.
-   The server assigns the version number and sets
-   `source_type="mlflow"` for this standalone-upload flow.
-   Because a draft is not
+   The server assigns the version number, sets
+   `source_type="mlflow"` for this standalone-upload flow, and marks the
+   version `finalized=false`. Because a draft is not
    preferred by latest resolution while an `active` version exists, an
-   in-flight upload never displaces an `active` recommended version. (When
-   the entity has no `active` version, latest resolution may surface the
-   in-flight draft, since it is the highest-numbered non-`deleted` version;
-   it carries `status="draft"` and is discarded if the upload fails, per
-   step 4.)
+   in-flight upload never displaces an `active` recommended version. It is
+   also never surfaced on its own: latest, alias, pull, and content
+   resolution all skip non-finalized versions, so even when the entity has
+   no `active` version the in-flight draft is not returned or pulled. It
+   carries `status="draft"` and is discarded if the upload fails, per
+   step 4.
 3. Using the returned version number, the client uploads each file
    through MLflow's existing artifact APIs to the controlled artifact
    prefix (`skills/@<organization>/<name>/<version>/`, with the
    `@<organization>` segment omitted when there is no organization).
-4. On success the client transitions the version to the caller's
-   requested final status (`active` by default, or `draft` when the
-   caller explicitly registered a draft). On failure the client discards
-   the version with the normal `draft` -> `deleted` transition and
-   removes any partially uploaded files.
+4. After the upload completes the client finalizes the version with an
+   explicit finalize request (`PATCH .../versions/{version}` carrying the
+   requested final `status` and `finalize=true`), which marks the upload
+   complete. The server does not recompute or verify the digest (the digest is
+   uniformly client-asserted; see Content digest); the finalize simply signals
+   that every file has been uploaded, whether the caller's requested final
+   status is `active` or `draft` (a draft-final upload still issues the finalize
+   even though its status does not change). Only on finalize does the server set
+   `finalized=true` and the version take the caller's requested final status
+   (`active` by default, or `draft` when the caller explicitly registered a
+   draft). A finalized `draft` is retrievable by explicit version like any other
+   draft; what the `finalized` flag gates is the in-flight, partially uploaded
+   window. On failure the client discards the version with the normal `draft` ->
+   `deleted` transition and removes any partially uploaded files.
 
 This keeps the published view atomic: a version becomes `active` only
 after its content is fully uploaded, and a failed upload leaves a
@@ -572,7 +669,7 @@ Agent plugin members are referenced by URI string rather than a separate
 data class. The URI format follows MLflow's `models:/name/version`
 convention:
 
-- `skills:/name` resolves to the skill's current latest version at creation
+- `skills:/name` resolves to the skill's latest `active` version at creation (never a `draft` or `deprecated`; the create fails if there is no `active` version)
 - `skills:/name/version` pins a specific version
 - `skills:/name@alias` resolves through an alias
 
@@ -751,13 +848,20 @@ The server parses the URI into its constituent fields
 for storage and validation. Every reference is resolved to a concrete
 `member_version` at create time and that integer is frozen into the member row:
 a pinned `skills:/name/version` reference stores the given version, a name-only
-`skills:/name` reference resolves to the skill's current latest version, and a
+`skills:/name` reference resolves to the skill's latest `active` version, and a
 `skills:/name@alias` reference resolves to the version the alias points to at
-that moment. Name-only resolution uses the standard latest-resolution rule, so
-it may select a `draft` when the skill has no `active` version and the draft is
-its highest-numbered non-`deleted` version; if no version resolves, the create
-request fails with
-`RESOURCE_DOES_NOT_EXIST`. Because the concrete version is captured on creation,
+that moment. Name-only member resolution deliberately differs from the dynamic
+latest-resolution used by individual `get`/`pull`: because a member reference is
+frozen at create time, it resolves only to the latest `active` version and never
+freezes a `draft` (unpublished) or `deprecated` (discouraged) version into a
+permanent member pin. If the skill has no `active` version, the create request
+fails with an error directing the author to publish the skill or pin an explicit
+version, rather than silently pinning a draft when the plugin is registered
+prematurely. Individual `get`/`pull` keep the standard latest-resolution rule,
+which may select a `draft`, precisely because they re-evaluate on each call. An
+explicit `skills:/name/version` pin still stores exactly the version given, and
+`skills:/name@alias` stores whatever the alias points to, since both are
+deliberate author choices. Because the concrete version is captured on creation,
 `member_version` is `NOT NULL` and a later change to the skill's latest version
 or alias target does not alter existing member rows.
 
@@ -838,6 +942,7 @@ class SkillRegistryMixin:
         source: str | None = None,
         ref: str | None = None,
         subpath: str | None = None,
+        digest: str | None = None,
         status: str = "active",
     ) -> SkillVersion:
         raise NotImplementedError(self.__class__.__name__)
@@ -858,7 +963,10 @@ class SkillRegistryMixin:
         self, name: str, organization: str = "",
     ) -> SkillVersion:
         """Raises RESOURCE_DOES_NOT_EXIST when the skill has no
-        non-deleted version (nothing resolves as latest)."""
+        non-deleted, finalized version (nothing resolves as latest).
+        Non-finalized versions (client uploads still in flight) are skipped, so a
+        brand-new skill whose first version is mid-upload has no latest until the
+        upload finalizes."""
         raise NotImplementedError(self.__class__.__name__)
 
     def search_skill_versions(
@@ -921,8 +1029,10 @@ class SkillRegistryMixin:
         organization: str = "",
     ) -> None:
         """Raises RESOURCE_DOES_NOT_EXIST when the target version does
-        not exist or is deleted, so an alias can never dangle. Any other
-        status (draft, active, deprecated) is a valid target."""
+        not exist, is deleted, or is non-finalized (a client upload still in
+        flight), so an alias can never dangle or resolve to not-yet-uploaded
+        content. Any other status (draft, active, deprecated) is a valid
+        target."""
         raise NotImplementedError(self.__class__.__name__)
 
     def delete_skill_alias(
@@ -969,9 +1079,12 @@ class SkillRegistryMixin:
         membership rows. With cascade=False (default) member skills are left in
         place as ordinary standalone skills. With cascade=True the plugin's
         member skills are also hard-deleted, subject to the same
-        referential-integrity checks as any skill hard delete; a member still
-        referenced by a different plugin version is retained rather than
-        deleted."""
+        referential-integrity checks as any skill hard delete; the checks run
+        before anything is removed, and if any member is still referenced by a
+        live (non-`deleted`) plugin version other than the one being deleted the
+        entire cascade delete fails and nothing is removed. Membership rows held
+        only by soft-deleted plugin versions do not block the cascade and are
+        purged along with the member."""
         raise NotImplementedError(self.__class__.__name__)
 
     # --- AgentPluginVersion operations ---
@@ -1003,21 +1116,26 @@ class SkillRegistryMixin:
         ref: str | None = None,
         subpath: str | None = None,
         status: str = "active",
-    ) -> AgentPluginVersion:
+    ) -> tuple[AgentPluginVersion, list[SkillVersion]]:
         """Register a packaged agent plugin as a single unit of work. For each
         entry in member_skills (a name, a subpath locating the skill within the
-        package, and optional description and keywords), create the Skill when
-        the name is free or add a version when the name has previously been a
-        member of this same plugin (derived from this plugin's member rows), set
-        search_text, and create a member SkillVersion whose source is derived
-        from the package (the package's source_type and source, with the entry's
-        subpath). Then create the packaged AgentPluginVersion referencing every
-        member skill version. If a member name is already taken in the
-        organization by a skill that is not part of this plugin's history, the
-        whole import fails. All of it commits in one database transaction or
+        package, a client-computed content digest, and optional description and
+        keywords), create the Skill when the name is free or add a version when
+        the name has previously been a member of this same plugin (derived from
+        this plugin's member rows), set search_text, and create a member
+        SkillVersion whose source is derived from the package (the package's
+        source_type and source, with the entry's subpath) and whose digest is
+        the entry's digest. Import never reuses an existing skill version on the
+        strength of a matching digest: every discovered member gets a new
+        version so that each version keeps exactly one immutable, package-derived
+        source (see Content digest). Then create the packaged AgentPluginVersion
+        referencing every member skill version. If a member name is already taken
+        in the organization by a skill that is not part of this plugin's history,
+        the whole import fails. All of it commits in one database transaction or
         none of it does. A store that cannot provide a single-transaction unit
         of work raises NotImplementedError rather than applying the import
-        partially."""
+        partially. Returns the packaged AgentPluginVersion and the member
+        SkillVersions it created."""
         raise NotImplementedError(self.__class__.__name__)
 
     def get_agent_plugin_version(
@@ -1099,8 +1217,10 @@ class SkillRegistryMixin:
         organization: str = "",
     ) -> None:
         """Raises RESOURCE_DOES_NOT_EXIST when the target version does
-        not exist, is deleted, or is withdrawn because it contains a
-        deleted member, so an alias can never dangle or bypass the kill
+        not exist, is deleted, is non-finalized (a client upload still in
+        flight), or is withdrawn because it contains a
+        deleted member, so an alias can never dangle, resolve to not-yet-uploaded
+        content, or bypass the kill
         switch. Any other status (draft, active, deprecated) is a valid
         target."""
         raise NotImplementedError(self.__class__.__name__)
@@ -1140,6 +1260,12 @@ while still making every operation reachable. The two search
 functions appear in both layers, mirroring
 `mlflow.search_registered_models` and
 `MlflowClient.search_registered_models` in the model registry.
+`import_agent_plugin` likewise appears in both layers, but as a division of
+labor rather than a passthrough: the `mlflow.genai` function fetches the source,
+detects the format, and translates it, then calls the
+`MlflowClient.import_agent_plugin` primitive that posts the prepared payload to
+`POST /import`. (`introspect_agent_plugin` is top-level only, since it writes
+nothing to the registry.)
 
 ### High-level workflow functions (`mlflow.genai`)
 
@@ -1164,9 +1290,13 @@ def register_skill(
     MlflowClient.create_skill() before registering versions or
     MlflowClient.update_skill() afterward. This matches the MCP
     Server Registry behavior
-    (register_mcp_server). If name is omitted, the name is
-    extracted from the skill's SKILL.md entry point (server-side
-    for remote sources, client-side for local paths). The server
+    (register_mcp_server). If name is omitted, the client
+    extracts it from the skill's SKILL.md entry point during local
+    inspection and submits it; the server never fetches the source
+    to infer content-derived fields. The client also computes the
+    content digest from SKILL.md and the files under subpath during
+    that same inspection and submits it whether or not name was
+    supplied. The server
     sets source_type from the source value (git, oci, or zip for
     external pointers) or from the creation flow (mlflow when the
     client uploads a local path). A typed source class
@@ -1242,14 +1372,14 @@ class PluginImportResult:
     warnings: list[PluginImportWarning]
 
 
-def introspect_plugin(
+def introspect_agent_plugin(
     *,
     source: GitSource | OCISource | ZipSource | str,
 ) -> PluginIntrospectionResult:
     """Inspect a local or remote plugin without modifying the registry."""
 
 
-def import_plugin(
+def import_agent_plugin(
     *,
     source: GitSource | OCISource | ZipSource | str,
     plugin_name: str | None = None,
@@ -1269,7 +1399,10 @@ def import_plugin(
     ZipSource) is converted to flat REST fields; a plain string is also
     accepted for convenience. Fetching and inspection are client-side; the
     member skills and the plugin version are then created atomically by the
-    server via the POST /import endpoint.
+    server via the POST /import endpoint. The `ImportRegisterResponse` carries
+    the packaged plugin version and the member skill versions (created or
+    created), which populate `PluginImportResult.plugin_version` and
+    `skill_versions` without additional reads.
     """
 
 
@@ -1333,6 +1466,7 @@ class MlflowClient:
         name: str,
         organization: str = "",
         source: GitSource | OCISource | ZipSource | str | None = None,
+        digest: str | None = None,
         status: str = "active",
     ) -> SkillVersion: ...
 
@@ -1396,14 +1530,16 @@ class MlflowClient:
         member_skills: list[dict[str, Any]] | None = None,
         source: GitSource | OCISource | ZipSource | str | None = None,
         status: str = "active",
-    ) -> AgentPluginVersion:
+    ) -> tuple[AgentPluginVersion, list[SkillVersion]]:
         """Post a client-prepared import payload to the transactional
         import-registration endpoint. The server creates the member skills
         and the packaged plugin version atomically; source_type is server-set
         and each member skill's source is derived from the package. Each
         member_skills entry carries a name, a subpath locating the skill within
-        the package, and optional description and keywords, read from its
-        SKILL.md during local inspection."""
+        the package, a client-computed content digest, and optional description
+        and keywords, read from its SKILL.md during local inspection. Returns
+        the packaged AgentPluginVersion and the member SkillVersions (all newly
+        created) parsed from the ImportRegisterResponse."""
 
     def get_agent_plugin(self, *, name: str, organization: str = "") -> AgentPlugin: ...
 
@@ -1510,14 +1646,29 @@ resource paths. It is exposed under both `/api/3.0/mlflow/skills` and
 `/ajax-api/3.0/mlflow/skills`, plus the corresponding static-prefix
 variants, following the MCP Server Registry (RFC-0004) pattern.
 
-**Field inference.** The server infers optional fields from source
-content when possible, so the simplest call requires only what cannot
-be derived. When `name` is omitted from a registration request, the
-server fetches the source and extracts the name from the skill's
-SKILL.md entry point. If the server cannot access the source (e.g.,
-private repositories requiring client-side credentials), registration
-fails with an error indicating that `name` must be provided explicitly.
-The server sets `source_type`; it is not a user-facing parameter. For
+**Field inference.** Deriving a value from source *content* requires reading
+the bytes, and the registry server never fetches a user-supplied source URL.
+Every content-derived field is therefore produced client-side during local
+inspection and submitted with the request; the server derives only from data it
+already holds (the submitted payload, the source pointer string, and bytes
+uploaded directly to it). This is the same rule the plugin import flow follows,
+and it keeps fetching of untrusted URLs off the server.
+
+A skill's `name` (and, for a package member, its `description` and `keywords`)
+is read from SKILL.md by the client (SDK or CLI) during inspection and
+submitted. The simplest
+invocation still omits the name because the client fills it in, whether the
+source is a local path it is about to upload or a remote git/oci/zip pointer it
+resolves with the user's own credentials. Because the server never reads
+content to derive it, `name` is always client-supplied; a raw REST caller that
+omits it is rejected with an error indicating that `name` must be provided
+explicitly. `digest` is computed by the
+client from the resolved content during the same inspection and submitted (see
+Content digest); the server stores the client-asserted value and does not
+recompute or verify it, for uploaded content or external pointers alike.
+
+The server sets `source_type`; it is not a user-facing parameter and needs no
+access to the content. For
 external pointers it is inferred from the `source` value: `.git` suffix
 or `git://` scheme = git, `oci://` scheme = oci, `.zip` = zip. The
 `oci://` scheme is an inference hint only: the server records
@@ -1540,9 +1691,12 @@ package becomes `assembled`. Because an ordinary agent plugin request
 that carries no plugin-level package is `assembled` by definition, a null-`source`
 request to the ordinary creation APIs is unambiguous (a skill version is
 `mlflow`, an agent plugin version is `assembled`). Keeping
-`source_type` server-set keeps SDKs as thin REST wrappers, avoids
-reimplementing inference in every language, and prepares for future
-server-side content inspection (e.g., signature verification).
+`source_type` server-set keeps that discriminator consistent across languages,
+and it needs no content, so it does not require the server to fetch anything.
+Content-derived fields are produced client-side instead, so the server never
+fetches user-supplied URLs; checks that operate on bytes uploaded directly to
+MLflow (e.g., signature verification) can still run server-side on that stored
+content.
 
 For agent plugins, `POST /register` and version creation validate the submitted
 canonical `plugin_json`. The server extracts and checks `name` and validates
@@ -1550,11 +1704,13 @@ the version as SemVer (normalizing semverish values). When `plugin_json` is
 absent or does not contain a version, the request must include a `version`
 field. When both `plugin_json["version"]` and the request-level `version` are
 present, they must agree; a mismatch is rejected. The server does not fetch remote package content. Client-side
-`import_plugin()` performs source fetching, format detection, filesystem
+`import_agent_plugin()` performs source fetching, format detection, filesystem
 validation, and adapter translation, then submits the canonical payload and
 member references to the transactional `POST /import` endpoint
 (`ImportRegisterRequest`), which creates the member skills and the packaged
-plugin version atomically.
+plugin version atomically and returns both in an `ImportRegisterResponse` (the
+packaged plugin version and the newly created member skill versions), so the
+client populates its result without additional reads.
 
 There is no skill-registry content-upload endpoint. When `source` is
 a local path, the client creates a version record with null source to
@@ -1569,14 +1725,14 @@ All paths relative to the logical skills router prefix.
 |---|---|---|
 | `POST` | `/` | Create a skill |
 | `GET` | `/` | Search skills |
-| `POST` | `/register` | Register a skill version (name optional; server infers from source when omitted, auto-creates parent) |
+| `POST` | `/register` | Register a skill version (name required at this endpoint; the SDK/CLI fills it from SKILL.md during local inspection so human callers omit it, but a raw REST caller that omits it is rejected; auto-creates parent) |
 | `GET` | `/@{organization}/{name}` | Get skill by organization and name |
 | `PATCH` | `/@{organization}/{name}` | Update skill fields |
 | `DELETE` | `/@{organization}/{name}` | Hard-delete skill (cascades, subject to references) |
 | `POST` | `/@{organization}/{name}/versions` | Create a skill version |
 | `GET` | `/@{organization}/{name}/versions` | Search versions |
 | `GET` | `/@{organization}/{name}/versions/{version}` | Get a specific version |
-| `PATCH` | `/@{organization}/{name}/versions/{version}` | Update version |
+| `PATCH` | `/@{organization}/{name}/versions/{version}` | Update version (status; `finalize=true` marks a client upload complete and flips `finalized=true`, whether or not the status changes; the digest is client-asserted and not re-verified) |
 | `DELETE` | `/@{organization}/{name}/versions/{version}` | Soft-delete a version (`status='deleted'`) |
 | `POST` | `/@{organization}/{name}/tags` | Set a skill-level tag |
 | `DELETE` | `/@{organization}/{name}/tags/{key}` | Delete a skill-level tag |
@@ -1635,10 +1791,10 @@ All paths relative to the logical agent-plugins router prefix.
 | `POST` | `/` | Create an agent plugin |
 | `GET` | `/` | Search agent plugins |
 | `POST` | `/register` | Validate or synthesize `plugin_json`, create or reuse the parent, and create a version |
-| `POST` | `/import` | Import a packaged plugin: atomically create the member skills (each with a derived source) and the plugin version from a client-prepared payload (`ImportRegisterRequest`) |
+| `POST` | `/import` | Import a packaged plugin: atomically create the member skills (each with a derived source) and the plugin version from a client-prepared payload (`ImportRegisterRequest`); returns the packaged plugin version and the newly created member skill versions (`ImportRegisterResponse`) |
 | `GET` | `/@{organization}/{name}` | Get agent plugin by organization and name |
 | `PATCH` | `/@{organization}/{name}` | Update agent plugin fields |
-| `DELETE` | `/@{organization}/{name}` | Hard-delete agent plugin (cascades versions, memberships, and aliases). With `cascade=true`, also hard-deletes member skills, subject to referential-integrity checks; without it, member skills are left in place |
+| `DELETE` | `/@{organization}/{name}` | Hard-delete agent plugin (cascades versions, memberships, and aliases). With `cascade=true`, also hard-deletes member skills; the whole delete fails atomically if any member is still referenced by a live (non-`deleted`) plugin version other than the one being deleted (membership rows held only by soft-deleted plugin versions do not block and are purged with the member); without it, member skills are left in place |
 | `POST` | `/@{organization}/{name}/versions` | Create an agent plugin version with members |
 | `GET` | `/@{organization}/{name}/versions` | Search agent plugin versions |
 | `GET` | `/@{organization}/{name}/versions/{version}` | Get a specific agent plugin version |
@@ -1706,8 +1862,9 @@ derived status and is excluded by any `status` equality filter. To filter on
 the status of a specific version, use version search.
 
 **Versions (all entity types):** `status = 'active'`,
-`organization = 'acme'`, `source_type = 'git'`, and
-`tags.approved = 'true'`.
+`organization = 'acme'`, `source_type = 'git'`,
+`tags.approved = 'true'`, and, for skill versions, `digest = '<hex>'`
+to find all versions of a skill that share a given content digest.
 
 Manifest keywords are not copied into MLflow tags. A derived version-level
 search projection supports portable free-text matching while `plugin_json`
@@ -1739,16 +1896,20 @@ class UpdateSkillRequest(BaseModel):
 
 
 class CreateSkillVersionRequest(BaseModel):
-    name: str | None = None  # optional for POST /register (inferred from source when omitted); ignored for POST /@{organization}/{name}/versions (name from parent)
+    name: str | None = None  # structurally nullable only because this model is shared with POST /@{organization}/{name}/versions (where name comes from the parent path and any body name is ignored); POST /register validates it as required (the SDK/CLI fills it from SKILL.md during local inspection, so a raw REST caller that omits it is rejected)
     organization: str = ""  # for POST /register only; ignored for versioned paths
     source: str | None = None
     ref: str | None = None
     subpath: str | None = None
+    digest: str | None = None  # client-computed content hash; stored and indexed, not server-verified
     status: str = "active"
 
 
 class UpdateSkillVersionRequest(BaseModel):
     status: str | None = None
+    finalize: bool = False  # on a client upload, signals the upload is complete
+    # and flips finalized=true; the server does not recompute or verify the
+    # digest (it is client-asserted), regardless of whether status changes
 
 
 class CreateAgentPluginRequest(BaseModel):
@@ -1801,6 +1962,7 @@ class MemberSkillDefinition(BaseModel):
     subpath: str  # path of this skill within the package
     description: str | None = None
     keywords: list[str] | None = None
+    digest: str | None = None  # client-computed content hash of this member's content
 
 
 class ImportRegisterRequest(BaseModel):
@@ -1856,6 +2018,7 @@ class SkillVersionResponse(BaseModel):
     source: str | None = None
     ref: str | None = None
     subpath: str | None = None
+    digest: str | None = None
     status: str = "active"
     aliases: list[str] = Field(default_factory=list)
     tags: dict[str, str] = Field(default_factory=dict)
@@ -1896,6 +2059,15 @@ class AgentPluginVersionResponse(BaseModel):
     last_updated_by: str | None = None
     creation_timestamp: int | None = None
     last_updated_timestamp: int | None = None
+
+
+class ImportRegisterResponse(BaseModel):
+    # The /import transaction returns both the packaged plugin version and the
+    # member skill versions it references, so the client need not re-fetch them;
+    # every member skill version is newly created by the import (import does not
+    # reuse existing versions).
+    plugin_version: AgentPluginVersionResponse
+    member_skill_versions: list[SkillVersionResponse] = Field(default_factory=list)
 
 
 class AgentPluginResponse(BaseModel):
@@ -2028,8 +2200,8 @@ flag also accepted; for example, `mlflow skills get skills:/code-review` and
 | `mlflow agent-plugins delete-version-tag` | `delete_agent_plugin_version_tag()` | Delete an agent plugin version tag |
 | `mlflow agent-plugins update-version` | `update_agent_plugin_version()` | Update agent plugin version status |
 | `mlflow agent-plugins delete-version` | `delete_agent_plugin_version()` | Soft-delete a version |
-| `mlflow agent-plugins introspect` | `introspect_plugin()` | Preview a local or remote plugin without registry writes |
-| `mlflow agent-plugins import` | `import_plugin()` | Import a plugin as a packaged agent plugin |
+| `mlflow agent-plugins introspect` | `introspect_agent_plugin()` | Preview a local or remote plugin without registry writes |
+| `mlflow agent-plugins import` | `import_agent_plugin()` | Import a plugin as a packaged agent plugin |
 | `mlflow agent-plugins pull` | `pull()` | Pull content to local filesystem |
 
 `create-version` and `register` accept `--plugin-json PATH` for a full standard
@@ -2075,13 +2247,15 @@ endpoint still does not require the server to reach user-supplied URLs.
 
 ### Read-only preview
 
-`introspect_plugin()` and `mlflow agent-plugins introspect` run the same plugin
+`introspect_agent_plugin()` and `mlflow agent-plugins introspect` run the same plugin
 discovery used by import but do not create or modify registry records.
 They accept either a local path or a remote Git, OCI, ZIP, or MLflow artifact
 source and return the detected format, canonical manifest preview, discovered
 skill names and paths, recognized unregistered content such as `mcp.json`, and
-warnings. The server infers `source_type` from the source value using the same
-rules as registration.
+warnings. The preview reports the `source_type` the version would receive,
+determined from the source value by the same rules the server applies at
+registration; because introspect writes no registry record, this is computed
+client-side.
 
 ### Supported input formats
 
@@ -2144,10 +2318,11 @@ stored in MLflow artifact storage the member's `source_type` is `mlflow`, its
 locates the skill within that stored package tree; because this pointer is
 persisted on the member skill version, the member resolves independently of its
 membership rows and survives a non-cascade delete of the plugin. The parent
-`Skill` stores the `description`
-and `keywords` from the submitted `MemberSkillDefinition` in its `search_text`,
-so the skill is discoverable by keyword and description search like any other
-skill. Each member skill is referenced by name in the member list (e.g.,
+`Skill` stores the `description` from the submitted `MemberSkillDefinition` in
+its `description` column, from which `search_text` is derived, and folds the
+`keywords` (which have no column of their own) into `search_text` as well, so the
+skill returns a populated description and is discoverable by keyword and
+description search like any other skill. Each member skill is referenced by name in the member list (e.g.,
 `skills:/code-review/1`). In the same transaction the server creates one
 packaged `AgentPluginVersion` whose `source_type` reflects where the
 package lives: the original typed source (preserving `ref` for Git
@@ -2175,19 +2350,29 @@ rejects an incoming canonical version that already exists. It then
 matches discovered skills to existing members by name, using the
 member skill names from the most recently created non-`deleted` agent plugin
 version's member list (a soft-deleted latest version is skipped so matching
-reflects the plugin's current effective members):
+reflects the plugin's current effective members). Import never reuses an
+existing skill version: every discovered member produces a new skill version so
+that each version keeps exactly one immutable, package-derived source (see
+Content digest). The name match only decides which skill the new version is
+added to:
 
-1. **Matching name:** The discovered skill's name matches a member name
-   in the previous member list. Import
-   creates a new version of that existing skill.
+1. **Matching name:** The discovered skill's name matches a member name in the
+   previous member list. Import adds a new version to that existing skill, with a
+   source derived from the newly imported package and the discovered content
+   `digest` recorded on it. When the content is unchanged the new version shares
+   the previous version's digest, which is how a client later recognizes it as
+   unchanged (clean diffs between agent plugin versions, and traces before and
+   after the re-import linking to the same content); the digest drives this
+   recognition on the read side rather than causing reuse at import time.
 2. **New name:** The name does not match any current member. If a skill with
    that name has previously been a member of this same plugin (for example, a
    member removed in an earlier version and now reintroduced), which the server
    derives from this plugin's member rows, import adds a new version to that
    existing skill. Otherwise, if the name is free within the organization,
-   import creates a new skill with its own next server-assigned integer version
-   and a source derived from the package. If the name is already taken by a
-   skill that is not part of this plugin's history, the import is rejected.
+   import creates a new skill with its own next server-assigned integer version.
+   Either way the new version's source is derived from the package and its digest
+   is the discovered content digest. If the name is already taken by a skill that
+   is not part of this plugin's history, the import is rejected.
 3. **Removed name:** A previous member's name is not found in the
    new source. The member is omitted from the new agent plugin version.
    The skill and its existing versions remain in the registry.
@@ -2197,7 +2382,7 @@ and a new one.
 
 After processing all discovered skills, the endpoint creates a new
 `AgentPluginVersion` with updated member references in the same transaction as
-the member skill versions it created or added. Previous agent
+the member skill versions it created. Previous agent
 plugin versions are immutable and unchanged.
 
 Agent plugin and member skill version sequences are independent: a plugin
@@ -2278,7 +2463,7 @@ plugin_version = mlflow.genai.register_agent_plugin(
 )
 ```
 
-Packaged agent plugins are typically created through `import_plugin()`, which
+Packaged agent plugins are typically created through `import_agent_plugin()`, which
 handles package inspection and member skill creation internally. See the
 [Plugin import](#plugin-import) section for details.
 
