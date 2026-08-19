@@ -1216,12 +1216,12 @@ in [implementation-details.md](implementation-details.md).
   `source_type="mlflow"` to store content directly in MLflow artifact
   storage.
 
-- **Artifact upload atomicity.** Client-side artifact upload and skill
-  version creation are separate operations. The upload flow keeps the
-  version in `draft` until the upload completes, so a failure leaves a
-  discarded draft rather than a content-less `active` version, but an
-  artifact backend without deletion support can retain the discarded
-  draft's unreferenced files until garbage collection.
+- **Artifact upload atomicity.** For a local-path source, registration
+  stores the content and creates the version in a single atomic
+  operation, so a failure creates no version at all rather than a
+  content-less or partially uploaded one. Because a skill is small, the
+  content travels with the registration request; there is no separate
+  upload phase or finalize step to leave a version in an in-flight state.
 
 # Alternatives
 

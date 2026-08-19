@@ -36,6 +36,29 @@ created by an import, and which plugins reference it, is derived from
 behavior). Import and standalone registration both rely on the primary-key
 uniqueness constraint to detect a name collision.
 
+### `skill_version_counters`
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `workspace` | `String(63)` | PK |
+| `organization` | `String(256)` | PK |
+| `name` | `String(256)` | PK |
+| `next_version` | `Integer` | durable version-number counter; advanced atomically on each registration attempt so numbers are never reused (see Version ordering) |
+
+PrimaryKey: `(workspace, organization, name)`.
+
+This is the durable allocation ledger for a skill identity. It is keyed by
+the same `(workspace, organization, name)` tuple as `skills` but is
+deliberately **not** a foreign key to `skills` and is **not** removed when the
+parent `Skill` is hard-deleted. Keeping the counter outside the hard-deletable
+`skills` row is what guarantees version numbers, and the identity-derived
+artifact paths built from them, are never reused across a delete-and-recreate
+cycle: hard-deleting a skill and registering the same name again continues
+allocating from where the prior incarnation left off (numbers may therefore
+have large gaps), so a stale byte left at a retired path can never collide with
+newly written content. The row is created on the first registration for an
+identity and persists thereafter.
+
 ### `skill_versions`
 
 | Column | Type | Notes |
@@ -50,7 +73,6 @@ uniqueness constraint to detect a name collision.
 | `subpath` | `String(2048)` | nullable; path within the artifact |
 | `digest` | `String(64)` | content hash of the resolved skill content, computed client-side and submitted; stored and indexed but not server-verified and not used to drive import reuse (see Content digest) |
 | `status` | `String(20)` | default `'active'` |
-| `finalized` | `Boolean` | server-set; `true` on creation for external-pointer registrations (no upload phase), and `false` for a client upload until an explicit finalize marks the upload complete and flips it to `true`. Latest, alias, pull, and content resolution skip non-finalized versions, so partially uploaded in-flight content is never surfaced or retrievable |
 | `created_by` | `String(256)` | |
 | `last_updated_by` | `String(256)` | |
 | `creation_timestamp` | `BigInteger` | millis since epoch |
@@ -62,12 +84,22 @@ delete. This supports administrative hard deletion of the parent
 and does not physically remove the version row.
 
 **Version ordering**: versions are monotonic integers assigned by
-the server. The next version number is one greater than the maximum
-`version` across all existing rows for that skill, including soft-`deleted`
-ones, and is assigned atomically so concurrent registrations cannot
-collide or reuse a number. Because soft-deleted versions keep their rows,
-a number is never reused even after the version it identified is deleted.
-Ordering is a simple integer comparison.
+the server from the identity's durable `next_version` counter, held in
+`skill_version_counters` (see above) rather than on the `skills` row. Each
+registration attempt atomically advances the counter and takes the new
+value *before* any content is written, so concurrent registrations cannot collide and a
+number is never reused, even by a later attempt after an earlier one
+fails. Because the counter advances per attempt rather than per committed
+row, a failed registration retires its number: version numbers are
+monotonic but may contain gaps, and the identity-derived artifact path of
+a retired number is never revisited (see Client-side upload flow), so a
+failed attempt's orphaned content can never contaminate a later version.
+Soft-deleted versions also keep their rows, so a number is likewise never
+reused after the version it identified is deleted. Because the counter
+outlives a hard delete of the parent skill, registering the same name again
+after a hard delete continues from the retained value rather than restarting
+at 1, so an identity-derived path is never reused even across a
+delete-and-recreate cycle. Ordering is a simple integer comparison.
 
 **Index**: `ix_skill_versions_latest_lookup` on `(workspace,
 organization, name, status, version)` supports latest-resolution
@@ -112,12 +144,9 @@ digest).
 **Alias integrity.** An alias `version` targets a version row under the
 same `(workspace, organization, name)` parent. Integrity is enforced by
 the application rather than by a separate database FK: `set_skill_alias`
-(and `set_agent_plugin_alias`) rejects a missing, `deleted`, or non-finalized
+(and `set_agent_plugin_alias`) rejects a missing or `deleted`
 target, and because a soft-deleted row persists a plain FK could not enforce the
-not-`deleted` rule. A non-finalized target is a client upload still in flight
-(see the `finalized` column); rejecting it keeps an alias from resolving to a
-version whose content has not finished uploading, consistent with latest, pull,
-and content resolution all skipping non-finalized versions. Soft-deleting a
+not-`deleted` rule. Soft-deleting a
 version removes any aliases that point to it. Agent plugin aliases (`agent_plugin_aliases`) follow the same
 pattern against `agent_plugin_versions.version`, and additionally reject a
 withdrawn target (a plugin version that contains a `deleted` member), so
@@ -581,48 +610,43 @@ self-contained pointer to it; the tree is reclaimed only when no skill
 version still references it.
 
 **Client-side upload flow.** When `source` is a local path (detected
-by the absence of a `://` scheme), the SDK uploads the content to
-MLflow artifact storage rather than treating it as a remote pointer:
+by the absence of a `://` scheme), the skill content is stored in MLflow
+artifact storage as part of registration rather than treated as a remote
+pointer. Because a skill is small (a `SKILL.md` and a handful of files, not
+large model artifacts), registration is a single atomic operation that carries
+the content, so there is no separate upload phase:
 
-1. The client validates the local directory and preflights that the
-   path can be registered.
-2. The client creates the `SkillVersion` with `source` set to null and
-   `status="draft"`, regardless of the caller's requested final status.
-   The server assigns the version number, sets
-   `source_type="mlflow"` for this standalone-upload flow, and marks the
-   version `finalized=false`. Because a draft is not
-   preferred by latest resolution while an `active` version exists, an
-   in-flight upload never displaces an `active` recommended version. It is
-   also never surfaced on its own: latest, alias, pull, and content
-   resolution all skip non-finalized versions, so even when the entity has
-   no `active` version the in-flight draft is not returned or pulled. It
-   carries `status="draft"` and is discarded if the upload fails, per
-   step 4.
-3. Using the returned version number, the client uploads each file
-   through MLflow's existing artifact APIs to the controlled artifact
-   prefix (`skills/@<organization>/<name>/<version>/`, with the
-   `@<organization>` segment omitted when there is no organization).
-4. After the upload completes the client finalizes the version with an
-   explicit finalize request (`PATCH .../versions/{version}` carrying the
-   requested final `status` and `finalize=true`), which marks the upload
-   complete. The server does not recompute or verify the digest (the digest is
-   uniformly client-asserted; see Content digest); the finalize simply signals
-   that every file has been uploaded, whether the caller's requested final
-   status is `active` or `draft` (a draft-final upload still issues the finalize
-   even though its status does not change). Only on finalize does the server set
-   `finalized=true` and the version take the caller's requested final status
-   (`active` by default, or `draft` when the caller explicitly registered a
-   draft). A finalized `draft` is retrievable by explicit version like any other
-   draft; what the `finalized` flag gates is the in-flight, partially uploaded
-   window. On failure the client discards the version with the normal `draft` ->
-   `deleted` transition and removes any partially uploaded files.
+1. The client validates the local directory and, during local inspection,
+   reads `name` and the other content-derived fields and computes the content
+   digest.
+2. The client submits the registration request carrying the packaged local
+   content together with that metadata. The server draws the next version
+   number from the skill's durable counter (see Version ordering), writes the
+   content to that version's controlled artifact prefix
+   (`skills/@<organization>/<name>/<version>/`, with the `@<organization>`
+   segment omitted when there is no organization), and only then commits the
+   `SkillVersion` row, with `source_type="mlflow"`, `source=null` (the content
+   is located by the version's own identity, the same path get and pull derive),
+   the client-asserted `digest`, and `status` set to the caller's requested
+   final status (`active` by default, or `draft` when the caller explicitly
+   registers a draft).
+3. Committing the version row only after its content is written means a failure
+   never leaves a content-less or partially uploaded version, and creates no
+   registry row to clean up. Because the version number was drawn from the
+   durable counter before the write, a failed attempt retires that number
+   rather than freeing it for reuse, so the next attempt writes to a fresh,
+   previously unused path. The failed attempt's bytes are unreferenced, are
+   reclaimed by ordinary garbage collection, and can never be mixed into a
+   later version.
 
-This keeps the published view atomic: a version becomes `active` only
-after its content is fully uploaded, and a failed upload leaves a
-discarded draft rather than a content-less `active` version. Creating as `draft` first means the flow needs no special
-single-version hard delete; it reuses the existing `draft` -> `deleted`
-transition. A backend without deletion support can retain the discarded
-draft's unreferenced files until garbage collection.
+Because the version is created only once its content is in place, there is no
+draft-until-uploaded state and no finalize step: a version is complete the
+instant it exists, so latest, alias, pull, and content resolution need no
+special handling for in-flight content. A deliberately registered `draft` is a
+complete version marked draft, not an upload-in-progress marker: it is
+retrievable and pullable by explicit version, is a valid alias target, and
+follows the ordinary latest-resolution rules for a `draft` (never preferred
+while an `active` version exists; see Per-version status).
 
 **Version uniqueness.** The combination of
 `(workspace, organization, name, version)` is unique. A skill
@@ -970,10 +994,7 @@ class SkillRegistryMixin:
         self, name: str, organization: str = "",
     ) -> SkillVersion:
         """Raises RESOURCE_DOES_NOT_EXIST when the skill has no
-        non-deleted, finalized version (nothing resolves as latest).
-        Non-finalized versions (client uploads still in flight) are skipped, so a
-        brand-new skill whose first version is mid-upload has no latest until the
-        upload finalizes."""
+        non-deleted version that resolves as latest."""
         raise NotImplementedError(self.__class__.__name__)
 
     def search_skill_versions(
@@ -1036,10 +1057,8 @@ class SkillRegistryMixin:
         organization: str = "",
     ) -> None:
         """Raises RESOURCE_DOES_NOT_EXIST when the target version does
-        not exist, is deleted, or is non-finalized (a client upload still in
-        flight), so an alias can never dangle or resolve to not-yet-uploaded
-        content. Any other status (draft, active, deprecated) is a valid
-        target."""
+        not exist or is deleted, so an alias can never dangle. Any other
+        status (draft, active, deprecated) is a valid target."""
         raise NotImplementedError(self.__class__.__name__)
 
     def delete_skill_alias(
@@ -1224,10 +1243,8 @@ class SkillRegistryMixin:
         organization: str = "",
     ) -> None:
         """Raises RESOURCE_DOES_NOT_EXIST when the target version does
-        not exist, is deleted, is non-finalized (a client upload still in
-        flight), or is withdrawn because it contains a
-        deleted member, so an alias can never dangle, resolve to not-yet-uploaded
-        content, or bypass the kill
+        not exist, is deleted, or is withdrawn because it contains a
+        deleted member, so an alias can never dangle or bypass the kill
         switch. Any other status (draft, active, deprecated) is a valid
         target."""
         raise NotImplementedError(self.__class__.__name__)
@@ -1310,8 +1327,10 @@ def register_skill(
     (GitSource, OCISource, ZipSource) is converted to flat REST
     fields; a plain string is also accepted for convenience and
     passed as the source field with type inferred by the server.
-    If source is a local path (no :// scheme), the client uploads
-    the files through existing MLflow artifact APIs."""
+    If source is a local path (no :// scheme), the client submits the
+    packaged content with the registration request and the server stores
+    it and creates the version in one atomic operation (no separate
+    upload or finalize step; see Client-side upload flow)."""
 
 
 def search_skills(
@@ -1719,10 +1738,46 @@ plugin version atomically and returns both in an `ImportRegisterResponse` (the
 packaged plugin version and the newly created member skill versions), so the
 client populates its result without additional reads.
 
-There is no skill-registry content-upload endpoint. When `source` is
-a local path, the client creates a version record with null source to
-obtain the server-assigned version number, then uploads through
-existing MLflow artifact APIs to the controlled path.
+When `source` is a local path, the registration request carries the
+packaged content, so `POST /register` and `POST .../versions` accept a
+`multipart/form-data` body with two parts:
+
+- a `metadata` part: `application/json` carrying the ordinary
+  `CreateSkillVersionRequest` fields (`name`, `organization`, `digest`,
+  `status`, and so on). The request model carries metadata only, never raw
+  bytes; `source` is omitted or null, which is how the server routes the
+  request to the upload flow rather than treating `source` as a remote
+  pointer.
+- a `content` part: `application/gzip`, a gzip-compressed tar archive of the
+  skill directory (the same tree the client hashed for the `digest`).
+
+The server validates the archive before storing it: it rejects an archive
+whose entries contain absolute paths or `..` segments. It accepts only regular
+files and directories and rejects any other entry type (symbolic links, hard
+links, devices, FIFOs, and the like), matching the digest's canonicalization
+rules so the stored tree is exactly what was hashed. It also rejects a
+decompressed size over
+a configurable limit (default 25 MiB, sufficient for text-based skills) to
+bound resource use. A malformed or oversize archive fails the registration
+with no version created. On success the server unpacks it to the version's
+controlled artifact prefix and commits the row (see Client-side upload flow).
+Remote-pointer registrations (`git`/`oci`/`zip`) carry no content part and use
+an ordinary `application/json` body.
+
+The body and the `source` field must agree, and the server rejects any
+mismatched combination rather than guessing intent:
+
+- a null or omitted `source` selects the upload flow and therefore *requires*
+  the `multipart/form-data` body with a `content` part; a plain
+  `application/json` registration with a null `source` is rejected, so a raw
+  REST caller cannot create a content-less version.
+- a non-null remote `source` *requires* the `application/json` body; a
+  `multipart/form-data` request that supplies both a `content` part and a
+  remote `source` is rejected rather than silently ignoring one of them.
+
+There is no separate content-upload
+endpoint and no finalize step: the version is created only once its content is
+in place.
 
 ### Skill endpoints
 
@@ -1739,7 +1794,7 @@ All paths relative to the logical skills router prefix.
 | `POST` | `/@{organization}/{name}/versions` | Create a skill version |
 | `GET` | `/@{organization}/{name}/versions` | Search versions |
 | `GET` | `/@{organization}/{name}/versions/{version}` | Get a specific version |
-| `PATCH` | `/@{organization}/{name}/versions/{version}` | Update version (status; `finalize=true` marks a client upload complete and flips `finalized=true`, whether or not the status changes; the digest is client-asserted and not re-verified) |
+| `PATCH` | `/@{organization}/{name}/versions/{version}` | Update version status |
 | `DELETE` | `/@{organization}/{name}/versions/{version}` | Soft-delete a version (`status='deleted'`) |
 | `POST` | `/@{organization}/{name}/tags` | Set a skill-level tag |
 | `DELETE` | `/@{organization}/{name}/tags/{key}` | Delete a skill-level tag |
@@ -1903,6 +1958,9 @@ class UpdateSkillRequest(BaseModel):
 
 
 class CreateSkillVersionRequest(BaseModel):
+    # Metadata only; carries no content bytes. For a local-path upload this is
+    # the JSON `metadata` part of a multipart request whose `content` part holds
+    # the gzip-tar archive (see the REST section); `source` is null in that case.
     name: str | None = None  # structurally nullable only because this model is shared with POST /@{organization}/{name}/versions (where name comes from the parent path and any body name is ignored); POST /register validates it as required (the SDK/CLI fills it from SKILL.md during local inspection, so a raw REST caller that omits it is rejected)
     organization: str = ""  # for POST /register only; ignored for versioned paths
     source: str | None = None
@@ -1914,9 +1972,6 @@ class CreateSkillVersionRequest(BaseModel):
 
 class UpdateSkillVersionRequest(BaseModel):
     status: str | None = None
-    finalize: bool = False  # on a client upload, signals the upload is complete
-    # and flips finalized=true; the server does not recompute or verify the
-    # digest (it is client-asserted), regardless of whether status changes
 
 
 class CreateAgentPluginRequest(BaseModel):
