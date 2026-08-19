@@ -527,8 +527,13 @@ before a re-import and one recorded after as exercising the same content. The
 registry exposes the field and indexes it so these comparisons are cheap; it does
 not itself build any diff or trace-linking feature on top of the field, and this
 RFC does not commit to one. When a version's digest is absent, it
-simply does not participate in digest grouping. The digest also serves as an
-integrity check that a pulled tree matches what was registered.
+simply does not participate in digest grouping. The digest also drives an
+integrity check on pull: when a pulled version has a `digest` set, the client
+recomputes it over the fetched tree and fails on mismatch, and an agent plugin
+pull applies the same check per member (see Pull semantics). This is the one
+place the digest is recomputed after registration, and it stays client-side:
+the check compares fetched content against the client-asserted identity and is
+not a registry guarantee.
 
 **MLflow artifact storage (`source_type="mlflow"`).** In addition to
 external source pointers, the registry supports storing skill content

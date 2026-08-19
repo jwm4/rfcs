@@ -1122,6 +1122,18 @@ package whose tree does not (for example, a Claude Code import or a directly
 registered source) keeps its original internal layout, so the pulled result
 reflects the source tree rather than a guaranteed Agent Plugins layout.
 
+**Digest verification.** When a pulled skill version has a `digest` set,
+the client recomputes the content digest over the fetched tree using the
+canonical hashing rule (see Content digest) and fails the pull if it does not
+match the recorded value, rather than installing content that differs from
+what the registering client asserted. On an agent plugin pull the same check
+runs per member: each member whose version carries a `digest` is verified
+against its fetched content, and any mismatch fails the whole pull rather than
+producing a divergent local plugin. A version with no `digest` is pulled
+without this check. Because the digest is client-asserted rather than
+server-verified, this compares the fetched content against the asserted
+identity; it is a client-side integrity check, not a registry guarantee.
+
 `pull` is harness-agnostic. It downloads content but does not generate
 harness-specific manifests or place files in harness-specific
 directories.
