@@ -1245,9 +1245,8 @@ Code, and generic plugin import adapters.
 
 - **Trace integration.** Trace linking, including
   `mlflow.skill_context()`, automatic SKILL span instrumentation,
-  and `search_skill_traces()`, is part of the MVP scope and will be
-  added to this RFC as a separate PR. The trace manifest mechanism
-  depends on the installation RFC below.
+  and `search_skill_traces()`, is planned as follow-up work. The trace
+  manifest mechanism depends on the installation RFC below.
 - **Installation and package manager integration.** Harness-specific
   installation commands, the package manager plugin interface, the
   `mlflow-skills.lock` resolution lock, and `install_count` will be
