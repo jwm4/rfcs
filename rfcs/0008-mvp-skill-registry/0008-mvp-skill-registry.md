@@ -608,7 +608,10 @@ packaged plugin uses this same source model: its `source_type` matches the
 package, its `source` and `subpath` (persisted on the version) locate the
 skill within the package, and for an MLflow-stored package the `source` is
 the package's artifact tree, so the skill is pulled and addressed like any
-other skill without reference to its membership.
+other skill without reference to its membership. Because `mlflow` content
+lives in MLflow artifact storage, `source_type="mlflow"` is supported only in
+deployments where MLflow serves artifacts; the external source types (`git`,
+`oci`, `zip`) have no such requirement.
 
 `register_skill()` creates the parent Skill when needed (with null
 `description`) and otherwise reuses the existing parent, except that it fails
