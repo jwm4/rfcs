@@ -735,9 +735,11 @@ when no active version exists.
 packaged or assembled, never both. Kind is derived from the persisted
 `source_type`: a version whose `source_type` is `git`, `oci`, `zip`, or
 `mlflow` is **packaged**; a version whose `source_type` is `assembled`
-is **assembled**. All versions of a given agent plugin must be the same
-kind; the server rejects a version whose derived kind differs from
-existing versions of the same agent plugin.
+is **assembled**. Kind is resolved per version and is not required to be
+consistent across versions of the same agent plugin, so the server accepts a
+new version whose derived kind differs from existing versions. Every consumer
+of kind (pull, latest-resolution, member sourcing) reads the kind of the
+specific version it operates on.
 
 - **Packaged:** has its own package that contains the complete agent
   plugin, either an external typed source (`source_type` of `git`, `oci`,
@@ -2379,6 +2381,15 @@ added to:
 
 A skill that is renamed between versions is treated as a removed skill
 and a new one.
+
+Whenever re-import matches a discovered skill to an existing skill (cases 1
+and 2 above), adding the new version requires EDIT on that skill, evaluated
+separately from plugin permissions, exactly as for any other version creation
+(see Permissions). This matters once an agent plugin's kind can vary across
+versions: an assembled version may reference a standalone skill the caller does
+not own, so a later packaged import that discovers the same name cannot append
+to it without EDIT on that skill. An import lacking EDIT on a matched skill
+fails as a whole, so a reference-level relationship never becomes a write.
 
 After processing all discovered skills, the endpoint creates a new
 `AgentPluginVersion` with updated member references in the same transaction as

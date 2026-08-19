@@ -725,11 +725,18 @@ An agent plugin version is one of two kinds:
 
 A version's kind is derived from its `source_type`: `assembled` is an
 assembled plugin, and any external or MLflow-stored package
-(`git`, `oci`, `zip`, `mlflow`) is packaged. An agent plugin's kind is
-fixed across its versions: every version of a given agent plugin must be
-the same kind, and the server rejects a new version whose kind differs
-from the existing versions. (A single name such as `pr-workflow` is
-therefore either always assembled or always packaged, never both.)
+(`git`, `oci`, `zip`, `mlflow`) is packaged. Each version is internally
+consistent (exactly one kind), but kind is not fixed across an agent plugin's
+versions: a single name such as `pr-workflow` may be packaged in one version
+and assembled in another. Kind is always resolved per version, so pull,
+latest-resolution, and member sourcing read the kind of the specific version
+they operate on and are unaffected by other versions. This lets an author
+migrate a plugin between authoring styles under a stable name rather than
+forcing consumers to adopt a new name and update their pinned references. A
+name-only pull, which resolves to the latest version, can therefore change
+behavior across a kind boundary (packaged fetches the whole package as a unit;
+assembled fetches each member individually); a version-pinned reference is
+unaffected.
 
 A packaged plugin has an agent plugin-level source and its members carry
 sources derived from that same package (subpaths of it); an assembled plugin
