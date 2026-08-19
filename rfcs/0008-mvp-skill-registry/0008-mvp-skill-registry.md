@@ -1080,11 +1080,10 @@ not involved in content transfer. `pull` is source-type-aware:
 **Single skill pull.** Routing is by `source_type`. For `git`, `oci`, and
 `zip`, the client fetches the content at the skill version's `source` to the
 destination directory; if `subpath` is set, only the content at that path
-within the artifact is extracted. For `mlflow`, the artifact base is the
-version's `source` when set (an imported member pointing into a package tree)
-or, when `source` is null, the path derived from the skill's own identity (a
-standalone upload); the client downloads the tree at that base, extracting only
-`subpath` when set. A skill created by importing a packaged plugin pulls
+within the artifact is extracted. For `mlflow`, the artifact base is always the
+version's `source`: the server-stored upload path for a standalone skill, or a
+package tree pointer for an imported member; the client downloads the tree at
+that base, extracting only `subpath` when set. A skill created by importing a packaged plugin pulls
 through this same path: its derived source, persisted on the skill version,
 locates the skill within the package (for an externally sourced package, the
 package's `source` plus a `subpath`; for an MLflow-stored package,
@@ -1101,7 +1100,7 @@ directory tree for `mlflow`. This pulls the whole package, including
 `mcp.json` and anything else it contains, not just the skill members. For
 an assembled plugin
 (`source_type="assembled"`), pull each member individually by its own
-`source_type` (an external source, or the identity-derived artifact tree
+`source_type` (an external source, or the member's stored artifact path
 for an `mlflow` member) to `skills/<member-name>/` under the destination,
 matching the Agent Plugins `skills/*/SKILL.md` discovery layout. If a
 member's content cannot be resolved (for example, its source is

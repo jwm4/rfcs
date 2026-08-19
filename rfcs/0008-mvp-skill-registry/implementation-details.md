@@ -36,29 +36,6 @@ created by an import, and which plugins reference it, is derived from
 behavior). Import and standalone registration both rely on the primary-key
 uniqueness constraint to detect a name collision.
 
-### `skill_version_counters`
-
-| Column | Type | Notes |
-|--------|------|-------|
-| `workspace` | `String(63)` | PK |
-| `organization` | `String(256)` | PK |
-| `name` | `String(256)` | PK |
-| `next_version` | `Integer` | durable version-number counter; advanced atomically on each registration attempt so numbers are never reused (see Version ordering) |
-
-PrimaryKey: `(workspace, organization, name)`.
-
-This is the durable allocation ledger for a skill identity. It is keyed by
-the same `(workspace, organization, name)` tuple as `skills` but is
-deliberately **not** a foreign key to `skills` and is **not** removed when the
-parent `Skill` is hard-deleted. Keeping the counter outside the hard-deletable
-`skills` row is what guarantees version numbers, and the identity-derived
-artifact paths built from them, are never reused across a delete-and-recreate
-cycle: hard-deleting a skill and registering the same name again continues
-allocating from where the prior incarnation left off (numbers may therefore
-have large gaps), so a stale byte left at a retired path can never collide with
-newly written content. The row is created on the first registration for an
-identity and persists thereafter.
-
 ### `skill_versions`
 
 | Column | Type | Notes |
@@ -84,22 +61,46 @@ delete. This supports administrative hard deletion of the parent
 and does not physically remove the version row.
 
 **Version ordering**: versions are monotonic integers assigned by
-the server from the identity's durable `next_version` counter, held in
-`skill_version_counters` (see above) rather than on the `skills` row. Each
-registration attempt atomically advances the counter and takes the new
-value *before* any content is written, so concurrent registrations cannot collide and a
-number is never reused, even by a later attempt after an earlier one
-fails. Because the counter advances per attempt rather than per committed
-row, a failed registration retires its number: version numbers are
-monotonic but may contain gaps, and the identity-derived artifact path of
-a retired number is never revisited (see Client-side upload flow), so a
-failed attempt's orphaned content can never contaminate a later version.
-Soft-deleted versions also keep their rows, so a number is likewise never
-reused after the version it identified is deleted. Because the counter
-outlives a hard delete of the parent skill, registering the same name again
-after a hard delete continues from the retained value rather than restarting
-at 1, so an identity-derived path is never reused even across a
-delete-and-recreate cycle. Ordering is a simple integer comparison.
+the server as `MAX(version) + 1` over the skill's existing rows, the same
+allocation the model registry uses. The maximum is taken over all rows for the
+skill, including soft-deleted ones, so a number is never reused while any
+version, live or `deleted`, still holds it. Concurrent registrations that
+compute the same next number collide on the `(workspace, organization, name,
+version)` primary key; the losing writer catches the uniqueness violation,
+recomputes `MAX(version) + 1`, and retries. Ordering is a simple integer
+comparison.
+
+Reuse of a number is bounded by the deletion lifecycle. Soft-deleting a version
+(`delete_skill_version`) keeps its row, so allocation keeps climbing and a
+soft-deleted number is never reused. A number restarts at 1 for an identity only
+when the parent skill is hard-deleted (`delete_skill`), which physically removes
+every row for that identity so `MAX(version)` resets to the empty case.
+
+Reusing a number never reuses a content location. Each `source_type=mlflow`
+upload stores its content at a unique server-chosen artifact path recorded in the
+version's `source` (see Client-side upload flow), not at a path derived from the
+version number, so a new version always writes to a fresh path even when it takes
+a number a prior incarnation once held, and two concurrent registrations never
+write the same path. A hard delete reclaims the stored content it owns: because
+artifact storage is not transactional with the registry database, the server
+captures the artifact paths recorded on the versions being removed, commits the
+row deletion, and then deletes those paths best-effort, keeping a shared package
+tree until its last referencing version is gone (see Deletion semantics).
+Committing the row deletion before touching content ensures a rolled-back
+deletion never leaves a restored row pointing at missing bytes; if the
+post-commit cleanup instead fails, the orphaned bytes are the same small,
+already-accepted leak as a crashed upload. Because it deletes only paths owned by
+the versions being removed
+rather than scanning the store for unreferenced paths, it never deletes a whole
+identity prefix, never touches a recreated skill's fresh-token paths, and never
+races an in-flight upload whose row has not yet committed (that path is recorded
+on no committed version, so the delete never considers it). The only content a
+delete leaves behind is bytes from a crashed upload that never committed a row;
+those pre-commit paths are intentionally retained, because no committed row
+distinguishes them from an upload still in progress, and the residue is a small,
+rare leak that never affects correctness.
+Remote-pointer registrations (`git`/`oci`/`zip`) store no content in the registry
+and need none of this.
 
 **Index**: `ix_skill_versions_latest_lookup` on `(workspace,
 organization, name, status, version)` supports latest-resolution
@@ -336,7 +337,14 @@ used by the Model Registry and RFC-0004:
   the skill versions whose persisted `source` points into it and is retained
   until the last referencing skill version is gone, so a non-cascade delete
   that leaves members also leaves the stored package tree those members pull
-  from.
+  from. When a hard delete removes a skill (or agent plugin) version, the delete
+  operation reclaims the artifact path recorded on that version: the server
+  commits the row deletion, then deletes the recorded path best-effort, since
+  artifact storage is not transactional with the registry database (see Version
+  ordering). A standalone upload's path is unique to its one version and is
+  reclaimed with it, while a shared package tree is reclaimed only once its last
+  referencing version is gone (the refcount above). A delete thus reclaims only
+  paths owned by the versions it removes, never a whole identity prefix.
 - Version delete operations (`delete_skill_version` and
   `delete_agent_plugin_version`) are soft deletes. They set
   `status='deleted'` when allowed by the lifecycle transition rules,
@@ -435,7 +443,7 @@ class SkillVersion:
     name: str
     version: int
     organization: str = ""
-    source: GitSource | OCISource | ZipSource | None = None
+    source: GitSource | OCISource | ZipSource | str | None = None  # plain str for mlflow content
     source_type: SkillSourceType | None = None
     digest: str | None = None
     status: SkillStatus = SkillStatus.ACTIVE
@@ -454,7 +462,7 @@ class SkillVersion:
 | `name` | `str` | Skill name (part of composite key with workspace and organization) |
 | `version` | `int` | Server-assigned monotonic integer. Each new version receives the next integer |
 | `organization` | `str` | Organization scope, from parent Skill |
-| `source` | `GitSource \| OCISource \| ZipSource \| None` | Typed source descriptor for external content (git, OCI, zip). For `source_type="mlflow"`, `source` is `None` for a standalone MLflow-stored skill (the artifact path is derived from the skill's own identity by convention) and is set to the package's artifact base path for a skill created by importing an MLflow-stored packaged plugin (a self-contained internal `mlflow-artifacts:` pointer captured at import time, with `subpath` locating the skill within that tree). A skill created by importing a packaged plugin more generally carries a source derived from the package: the package's `source_type` and `source` with a `subpath` locating the skill within the package. Because an imported member's pointer is stored on the skill version itself, its content resolves without reference to any membership row. The REST API represents this as flat `source_type`, `source`, `ref`, `subpath` fields; the SDK wraps and unwraps the typed classes (an `mlflow` `source`, when set, is a plain artifact-path string rather than a typed class) |
+| `source` | `GitSource \| OCISource \| ZipSource \| str \| None` | Typed source descriptor for external content (git, OCI, zip); a plain `str` for `mlflow` content. For `source_type="mlflow"`, `source` is a server-set artifact path: for a standalone MLflow-stored skill it is the unique path where the server stored the uploaded content, and for a skill created by importing an MLflow-stored packaged plugin it is the package's artifact base path (a self-contained internal `mlflow-artifacts:` pointer captured at import time, with `subpath` locating the skill within that tree). A skill created by importing a packaged plugin more generally carries a source derived from the package: the package's `source_type` and `source` with a `subpath` locating the skill within the package. Because an imported member's pointer is stored on the skill version itself, its content resolves without reference to any membership row. The REST API represents this as flat `source_type`, `source`, `ref`, `subpath` fields; the SDK wraps and unwraps the typed classes (an `mlflow` `source` is a plain artifact-path string rather than a typed class) |
 | `source_type` | `SkillSourceType \| None` | Server-set discriminator (`git`, `oci`, `zip`, `mlflow`), populated on responses. Clients never supply it on create; the server infers it (see the field-inference rules below). Together with `source` it determines how content is stored and how `pull` routes |
 | `digest` | `str \| None` | Content hash of the resolved skill content (the same notion as a dataset `digest`). Computed by the client during local inspection and submitted at registration and import; client-asserted and not server-verified. It identifies a version by content within a skill name. Stored, returned on get, and indexed so callers can group versions by content (clean diffs between agent plugin versions, and traces before and after a change linking to the same content); it does not drive import, which always creates a new member version (see Content digest) |
 | `status` | `SkillStatus` | Per-version lifecycle: `draft`, `active`, `deprecated`, `deleted` |
@@ -481,22 +489,23 @@ only the fields relevant to that type:
 | `OCISource` | `image`, `subpath` | OCI image. `image` is the image reference, supplied with the `oci://` scheme (e.g., `oci://ghcr.io/acme/plugin:v1`) so the server can infer `source_type`. The scheme is an inference hint only: the persisted `source` is the bare reference (`ghcr.io/acme/plugin:v1`). `subpath` is the path within the image (optional). |
 | `ZipSource` | `url`, `subpath` | ZIP archive. `url` is the archive URL. `subpath` is the path within the archive (optional). |
 
-MLflow artifact storage does not use a source class; its `source`, when
-present, is a plain artifact-path string. When `source` is `None`, the
-artifact path is derived from the skill's identity and version (a standalone
-upload). When `source` is set, it is the artifact base of a package tree a
-skill was imported from, and `subpath` locates the skill within it.
+MLflow artifact storage does not use a source class; its `source` is a plain
+artifact-path string. For a standalone upload it is the unique path where the
+server stored the content (see Client-side upload flow); the whole stored tree
+is the skill, so `subpath` is null. For a skill imported from a package it is
+the artifact base of the package tree, and `subpath` locates the skill within
+it.
 
 The REST API represents these as flat fields (`source_type`,
 `source`, `ref`, `subpath`); the SDK converts between typed classes
 and flat fields. The server determines `source_type` from the source
 value for external pointers and from the creation flow for content it
-stores or resolves by convention (see the field-inference rules below),
+stores itself (the upload flow; see the field-inference rules below),
 and returns it in responses. The SDK surfaces `source_type` as a field on
 the version and uses it to reconstruct the typed class for external
-sources; for `mlflow` content the `source` is a plain artifact-path string
-when set (an imported member) or null, in which case the path is derived by
-convention from the skill's identity.
+sources; for `mlflow` content the `source` is a plain artifact-path string,
+the server-stored upload path for a standalone skill or the package artifact
+base for an imported member.
 
 **Content digest.** Each version carries a `digest`, a SHA-256 hash
 (lowercase hex, 64 characters) of the resolved skill content: the `SKILL.md`
@@ -572,24 +581,26 @@ stored alongside their models, or who operate in airgapped
 environments where external sources are not reachable.
 
 For a standalone MLflow-stored skill, content is stored as a directory tree
-of individual files under a
-controlled artifact path derived from the skill's identity and
-version. Workspace scoping is handled at the artifact store level
-(each workspace has its own artifact root), so the path within the
-store is `skills/@<organization>/<name>/<version>/` when the skill has
-an organization and `skills/<name>/<version>/` when it does not; the
-`@<organization>` segment is omitted entirely, along with its slash, when
-the organization is empty. The `source` field is null for a
-standalone MLflow-stored skill; the system knows where to find it by
-convention. (A skill imported from an MLflow-stored package instead
-carries an explicit `source` pointing at the package's artifact tree, as
-described below.) Pull downloads the directory tree from the artifact
-store. The MLflow UI can browse individual files within a stored
-skill version when artifact proxying is enabled.
+of individual files at a unique artifact path the server chooses for each
+upload and records in the version's `source`, rather than at a path derived
+from the version number. Workspace scoping is handled at the artifact store
+level (each workspace has its own artifact root), and the path within the
+store is `skills/@<organization>/<name>/<token>/` when the skill has an
+organization and `skills/<name>/<token>/` when it does not (the
+`@<organization>` segment, along with its slash, is omitted when the
+organization is empty); `<token>` is a per-upload identifier, so the path is
+never reused across versions or across a delete-and-recreate cycle. The
+`source` field holds this path, and get and pull read it rather than deriving
+a location by convention. (A skill imported from an MLflow-stored package
+instead carries a `source` pointing at the package's artifact tree, with a
+`subpath`, as described below.) Pull downloads the directory tree from that
+path. The MLflow UI can browse individual files within a stored skill version
+when artifact proxying is enabled.
 
-The same artifact path convention applies to agent plugins stored
-with `source_type="mlflow"`: `agent-plugins/@<organization>/<name>/<version>/`,
-with the `@<organization>` segment omitted when there is no organization.
+The same unique-path scheme applies to agent plugin content stored
+with `source_type="mlflow"`: `agent-plugins/@<organization>/<name>/<token>/`,
+with the `@<organization>` segment omitted when there is no organization and
+`<token>` a per-upload identifier recorded in the version's `source`.
 
 When a packaged plugin whose content lives in MLflow artifact storage is
 imported, its member skills are not copied into per-skill artifact paths.
@@ -597,7 +608,7 @@ Each member skill version carries `source_type="mlflow"` with `source` set
 to the plugin version's artifact directory (above) and a `subpath` that
 locates the skill within that stored package tree. This base pointer is
 persisted on the skill version itself at import time, so it is **not**
-resolved from the skill's membership or from the skill's own identity:
+resolved from the skill's membership:
 even after the containing plugin is deleted, the surviving skill still
 carries an explicit pointer to the retained tree. Pulling such a skill
 fetches only the content under `subpath` from that package tree. Because
@@ -613,31 +624,37 @@ version still references it.
 by the absence of a `://` scheme), the skill content is stored in MLflow
 artifact storage as part of registration rather than treated as a remote
 pointer. Because a skill is small (a `SKILL.md` and a handful of files, not
-large model artifacts), registration is a single atomic operation that carries
+large model artifacts), registration is a single request that carries
 the content, so there is no separate upload phase:
 
 1. The client validates the local directory and, during local inspection,
    reads `name` and the other content-derived fields and computes the content
    digest.
 2. The client submits the registration request carrying the packaged local
-   content together with that metadata. The server draws the next version
-   number from the skill's durable counter (see Version ordering), writes the
-   content to that version's controlled artifact prefix
-   (`skills/@<organization>/<name>/<version>/`, with the `@<organization>`
-   segment omitted when there is no organization), and only then commits the
-   `SkillVersion` row, with `source_type="mlflow"`, `source=null` (the content
-   is located by the version's own identity, the same path get and pull derive),
-   the client-asserted `digest`, and `status` set to the caller's requested
-   final status (`active` by default, or `draft` when the caller explicitly
-   registers a draft).
-3. Committing the version row only after its content is written means a failure
+   content together with that metadata. The server writes the content to a
+   unique artifact path it chooses for this upload
+   (`skills/@<organization>/<name>/<token>/`, with the `@<organization>` segment
+   omitted when there is no organization and `<token>` a server-generated
+   identifier unique to this upload), allocates the version number as
+   `MAX(version) + 1` (see Version ordering), and commits the `SkillVersion` row
+   referencing that path, with `source_type="mlflow"`, `source` set to the stored
+   artifact path (a standalone upload has no `subpath`; the whole stored tree is
+   the skill), the client-asserted `digest`, and `status` set to the caller's
+   requested final status (`active` by default, or `draft` when the caller
+   explicitly registers a draft). If a concurrent registration already took that
+   number, the insert collides on the `(workspace, organization, name, version)`
+   primary key; the server recomputes `MAX(version) + 1` and retries the commit
+   without rewriting the already-stored content.
+3. Committing the version row only after its content is stored means a failure
    never leaves a content-less or partially uploaded version, and creates no
-   registry row to clean up. Because the version number was drawn from the
-   durable counter before the write, a failed attempt retires that number
-   rather than freeing it for reuse, so the next attempt writes to a fresh,
-   previously unused path. The failed attempt's bytes are unreferenced, are
-   reclaimed by ordinary garbage collection, and can never be mixed into a
-   later version.
+   registry row to clean up. Because the content path is unique per upload, a
+   failed attempt's bytes sit at a path no committed version references and can
+   never be mixed into another version. Because content is reclaimed only by
+   hard-deleting the version that owns the path (see Version ordering) and never
+   by scanning for unreferenced paths, reclamation never races an in-flight
+   upload and never removes a path before its row commits; the rare bytes left by
+   a crashed upload are intentionally retained, a small leak that is never a
+   correctness concern.
 
 Because the version is created only once its content is in place, there is no
 draft-until-uploaded state and no finalize step: a version is complete the
@@ -712,7 +729,7 @@ class AgentPluginVersion:
     version: str
     organization: str = ""
     plugin_json: dict[str, Any] = field(default_factory=dict)
-    source: GitSource | OCISource | ZipSource | None = None
+    source: GitSource | OCISource | ZipSource | str | None = None  # plain str for mlflow content
     source_type: SkillSourceType | None = None
 
     status: SkillStatus = SkillStatus.ACTIVE
@@ -785,7 +802,7 @@ specific version it operates on.
 - **Assembled:** has no plugin-level package; its content is defined
   entirely by individual member references (`source_type="assembled"`).
   Each skill member is pulled by its own `source_type` (an external source,
-  or the identity-derived artifact tree for an `mlflow` member). If a
+  or the member's stored artifact path for an `mlflow` member). If a
   member's content cannot be resolved, `pull` fails rather than producing a
   partial local agent plugin.
 
@@ -1652,9 +1669,9 @@ nulling.
 client calls `get_skill_version` (or resolves an alias) to obtain the
 version's `source_type` and source pointer, then routes on `source_type`:
 `git` clone, `oci` pull, `zip` download, or `mlflow` artifact-tree
-download. For `mlflow`, the artifact base is the version's `source` when set
-(an imported member pointing into a package tree) or, when `source` is null,
-the path derived from the skill's own identity (a standalone upload). A skill
+download. For `mlflow`, the artifact base is always the version's `source`: the
+server-stored upload path for a standalone skill, or a package tree pointer
+(with `subpath`) for an imported member. A skill
 created by importing a packaged plugin pulls through this same routing: it
 carries a derived `source` (and `subpath`) persisted on the version, so the
 client fetches just that skill's content without pulling the whole plugin and
@@ -1702,16 +1719,18 @@ or `git://` scheme = git, `oci://` scheme = oci, `.zip` = zip. The
 scheme, so `pull` and `introspect` operate on the native OCI reference.
 For content
 without an external pointer the server sets it from the endpoint used, not from
-the null `source` alone: a standalone skill version uploaded through the
-ordinary creation APIs with a null `source` becomes `mlflow` (content stored in
-MLflow artifact storage). The import-registration endpoint derives each member
-skill's source from the package: the member skills take the package's
+the submitted `source` value: a standalone skill version uploaded through the
+ordinary creation APIs with a null submitted `source` becomes `mlflow` (content
+stored in MLflow artifact storage). The import-registration endpoint derives each
+member skill's source from the package: the member skills take the package's
 `source_type` and `source` with a `subpath` locating the skill, so an import
 from a git/oci/zip package yields members of that same source type, and an
 import of a package stored in MLflow artifact storage yields `mlflow` members
 whose `source` is set to the plugin's artifact tree and persisted on each
-member (a non-null `mlflow` source arises only this way; a null `source`
-still unambiguously means a standalone `mlflow` skill). An agent plugin version created
+member. In every case `source_type` is fixed by the creation flow, not by
+whether the submitted `source` was null: a standalone upload submits a null
+`source`, and the server then records the artifact path it wrote the content to,
+so a committed `mlflow` version always carries a non-null stored `source`. An agent plugin version created
 through the ordinary creation APIs from member references with no plugin-level
 package becomes `assembled`. Because an ordinary agent plugin request
 that carries no plugin-level package is `assembled` by definition, a null-`source`
@@ -1960,7 +1979,9 @@ class UpdateSkillRequest(BaseModel):
 class CreateSkillVersionRequest(BaseModel):
     # Metadata only; carries no content bytes. For a local-path upload this is
     # the JSON `metadata` part of a multipart request whose `content` part holds
-    # the gzip-tar archive (see the REST section); `source` is null in that case.
+    # the gzip-tar archive (see the REST section); the client leaves `source`
+    # null to route into the upload flow, and the server sets the stored
+    # version's `source` to the artifact path where it wrote the content.
     name: str | None = None  # structurally nullable only because this model is shared with POST /@{organization}/{name}/versions (where name comes from the parent path and any body name is ignored); POST /register validates it as required (the SDK/CLI fills it from SKILL.md during local inspection, so a raw REST caller that omits it is rejected)
     organization: str = ""  # for POST /register only; ignored for versioned paths
     source: str | None = None
