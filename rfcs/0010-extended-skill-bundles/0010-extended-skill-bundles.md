@@ -1,4 +1,4 @@
-# RFC 0009: Extended Skill Bundles
+# RFC 0010: Extended Skill Bundles
 
 | start_date   | 2026-07-20 |
 | :----------- | :--------- |
