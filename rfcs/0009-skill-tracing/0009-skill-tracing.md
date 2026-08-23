@@ -68,10 +68,13 @@ Spans are produced along three paths:
   tracing API directly.
 - **Automatic instrumentation in agent frameworks.** When
   application code resolves a skill from the registry and hands it to a
-  framework such as LangGraph or ADK, MLflow holds the mapping from that
-  skill to its registry coordinates in process, and the framework
-  autologger annotates spans from it without the developer writing
-  tracing code.
+  framework such as LangGraph or the OpenAI Agents SDK, MLflow holds
+  the mapping from that skill to its registry coordinates in process,
+  and the framework autologger annotates spans from it without the
+  developer writing tracing code. Frameworks that MLflow traces by
+  receiving their native OpenTelemetry output rather than by running
+  instrumentation inside them are handled like the equivalent
+  harnesses (see the harness journey).
 - **Automatic instrumentation in harnesses.** When MLflow installs
   a skill into a harness such as Claude Code, it records which registry
   coordinates the harness-local skill came from. The harness autologger
@@ -216,8 +219,9 @@ in the trace.
 
 #### Trace skills loaded by an agent framework
 
-A developer using an agent framework (LangGraph, ADK, and similar)
-resolves a skill from the registry and hands it to the framework. They
+A developer using an agent framework (LangGraph, the OpenAI Agents
+SDK, and similar) resolves a skill from the registry and hands it to
+the framework. They
 should not have to also wrap their agent code in a tracing context to
 get the linkage.
 
@@ -238,10 +242,14 @@ get the linkage.
    with the LLM and tool spans produced while the skill was active as
    its children.
 
-Whether this path is achievable depends on each framework exposing a
-skill object or activation hook that MLflow can observe. That
-investigation, and the fallback for frameworks that expose no such hook,
-belongs in the detailed design.
+This follows a pattern MLflow already uses for other registry
+entities: resolving an entity records its identity, and tracing picks
+that identity up automatically when related spans are created. Skill
+activation is observable in the frameworks surveyed so far, most
+directly where loading a skill is itself a tool invocation. The
+per-framework mechanisms, and the convention for where the skill's
+span begins and ends around a point-in-time activation, belong in the
+detailed design.
 
 #### Trace skills installed into a harness
 
@@ -279,6 +287,14 @@ Nothing about the run fails in that case: the agent runs normally,
 other autologging is unaffected, and the developer can still instrument
 explicitly. The same is true of a missing or unreadable install record.
 
+This journey applies in full to harnesses whose tracing integration is
+provided by MLflow. Some harnesses instead trace themselves through
+native OpenTelemetry export, with MLflow as the receiver; for those,
+MLflow annotates the spans the harness already emits with skill
+coordinates when the skill invocation is identifiable in them, and
+does not create additional spans on the harness's behalf. The
+receiving-side mechanics belong in the detailed design.
+
 #### Measure adoption of a registered skill
 
 A platform owner wants to know whether a skill is being used, and which
@@ -310,7 +326,10 @@ This journey is the reason exact-match semantics on span attributes
 matter. Substring matching against serialized span content would match
 `code-review` inside `code-review-strict`, and would match version `1`
 inside version `10`, which makes an adoption count wrong rather than
-approximate.
+approximate. Skill trace queries therefore extend the existing
+`search_traces` filter syntax rather than adding a skill-specific
+search function, and exact matching on span attribute values becomes a
+store-level requirement of this RFC.
 
 #### Assess the impact of deprecating a skill version
 
@@ -463,33 +482,14 @@ TBD.
   implementation detail. Is that the right trade, and should the
   attribute names be namespaced differently if they are to be set by
   non-MLflow instrumentation?
-- **Query API.** The journeys use `search_traces` with a filter on span
-  attributes instead of a skill-specific search function. This requires
-  the store layer to support exact-match filtering on span attribute
-  values; the existing `span.attributes.*` filter path uses text search
-  against serialized JSON, which does not provide exact-match semantics.
-  Is enhancing the filter path preferable to adding a narrower function
-  that could ship without it?
+
 - **Span exposure.** The journeys write
   `with mlflow.genai.skill_context(...):` without binding the span, so
   callers cannot mutate it after creation. Is there a use case that requires
   access to the span, and if so does it outweigh the risk of
   after-the-fact manipulation?
-- **Automatic context capture.** The agent framework journey assumes
-  MLflow can observe the moment the framework activates a resolved
-  skill. LangChain's Deep Agents library loads skills through
-  middleware with a defined invocation step, which suggests such a
-  hook exists there. Which other frameworks expose one, and what is
-  the fallback for frameworks that do not?
-- **Harnesses MLflow does not run inside.** The harness journey assumes
-  an MLflow autologger running in the harness's process, which can read
-  the install record at run time. That holds for Claude Code, Codex,
-  Qwen Code, and OpenCode, where MLflow ships a hook or plugin. For
-  Gemini CLI, Goose, and OpenHands, the harness exports OpenTelemetry
-  natively and MLflow is only an OTLP receiver with no code in the
-  process. Should skill linkage for those harnesses come from the
-  harness emitting the attributes itself, from MLflow enriching spans
-  on ingest, or be out of scope?
+
+
 - **Install record location.** The harness journey depends on a
   record written at install time that maps harness-local skill names to
   registry coordinates. Is it per project, under a user-level
