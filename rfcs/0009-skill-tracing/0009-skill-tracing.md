@@ -166,7 +166,9 @@ in the trace.
    Because this creates an ordinary MLflow span, existing framework
    autologgers (LangChain, OpenAI, Anthropic, and others) need no
    modification: any span they create inside the block is parented to
-   the `SKILL` span automatically.
+   the `SKILL` span automatically. The context manager manages the
+   span internally and does not expose it to the caller, so the
+   recorded skill coordinates cannot be altered after creation.
 
    **OpenTelemetry equivalent:** a caller instrumenting with plain OTel
    sets the same attributes on its own span, and the resulting trace is
@@ -267,7 +269,10 @@ resolution step.
    and records the resulting harness-local skill name against the
    registry coordinates that were installed. Recording it at install
    time is what makes the linkage survive a package manager that renames
-   or prefixes the skill.
+   or prefixes the skill. Project-scoped installs record this in the
+   project, and user-scoped installs record it in the user's MLflow
+   configuration. When both define the same harness-local skill name,
+   the project entry wins.
 2. Enable tracing for the harness:
    ```bash
    mlflow autolog claude
@@ -483,17 +488,8 @@ TBD.
   attribute names be namespaced differently if they are to be set by
   non-MLflow instrumentation?
 
-- **Span exposure.** The journeys write
-  `with mlflow.genai.skill_context(...):` without binding the span, so
-  callers cannot mutate it after creation. Is there a use case that requires
-  access to the span, and if so does it outweigh the risk of
-  after-the-fact manipulation?
 
 
-- **Install record location.** The harness journey depends on a
-  record written at install time that maps harness-local skill names to
-  registry coordinates. Is it per project, under a user-level
-  configuration directory, or both with a precedence rule?
 - **Digest-based linking.** `SKILL` spans are shown recording the
   content digest alongside `name` and `version`. On the automatic
   paths the instrumentation has the digest from resolution or install;
