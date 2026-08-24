@@ -24,10 +24,10 @@ Some changes do **not** require an RFC:
 
 ## What the process is
 
-1. Create an issue with `enhancement` label in the MLflow repository, with the brief description of the problem and the expected outcome.
+1. Create an issue with `enhancement` label in the MLflow repository, with the brief description of the problem and the expected outcome. The GitHub issue number is the RFC number. Use that issue number for the RFC directory and file name to avoid duplicate RFC numbers.
 2. MLflow maintainers will triage the issue and determine if it is a candidate for an RFC. If it is, they will mark the issue with `ready` label.
-3. Once the issue is signed off, create a new directory `rfcs/0000-my-feature` in this repository (where "my-feature" is descriptive — don't assign a number yet).
-4. Copy `0000-template.md` to the directory and fill in the RFC. Put care into the details: RFCs that do not present convincing motivation or are not honest about drawbacks tend to be poorly received.
+3. Once the issue is signed off, create a new directory `rfcs/<issue-number>-my-feature` in this repository, where `<issue-number>` is the GitHub issue number from step 1 and "my-feature" is descriptive. For example, issue `12345` should use `rfcs/12345-my-feature`.
+4. Copy `0000-template.md` to the directory, rename the copy to `<issue-number>-my-feature.md`, and fill in the RFC. Put care into the details: RFCs that do not present convincing motivation or are not honest about drawbacks tend to be poorly received.
 5. Submit a pull request in this repository. The RFC will receive design feedback from the community and maintainers. Be prepared to revise it.
 6. Build consensus and integrate feedback.
 7. The maintainer team will decide whether the RFC is a candidate for inclusion. This may take time — we encourage you to seek community review first.
