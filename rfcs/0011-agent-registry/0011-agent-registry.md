@@ -3,7 +3,7 @@
 | start_date   | 2026-08-24 |
 | :----------- | :--------- |
 | mlflow_issue | |
-| rfc_pr       | |
+| rfc_pr       | https://github.com/mlflow/rfcs/pull/39 |
 
 | Author(s)              | [Bill Murdock](https://github.com/jwm4) (Red Hat) |
 | :--------------------- | :-- |
