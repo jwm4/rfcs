@@ -92,7 +92,8 @@ which defines the `Skill` and `SkillVersion` entities, the
 client-asserted content `digest` that this RFC records on spans.
 Because the harness path depends on the install-time record described
 above, harness installation commands and the package manager
-integration behind them are part of this RFC. The
+integration behind them are in scope for this RFC (see
+[Open questions](#open-questions) for the scope discussion). The
 [MCP Server Registry (RFC-0004)](https://github.com/mlflow/rfcs/blob/main/rfcs/0004-mcp-registry/0004-mcp-registry.md)
 links MCP servers to traces after the fact and at trace level, which
 suits discrete server invocations; skills use span-level inline
@@ -490,6 +491,22 @@ TBD.
 
 
 
+- **Installation scope.** Automatic instrumentation for harnesses
+  requires an install-time record connecting harness-local skills to
+  registry coordinates, and this RFC currently brings harness
+  installation commands and package manager integration into scope to
+  produce it. That is a large undertaking in its own right, and it is
+  worth asking whether this RFC should carry it. A narrower
+  alternative would be a command that only activates tracing: the
+  user installs the skill into the harness however they choose, then
+  tells MLflow which registry coordinates the installed skill
+  corresponds to, and MLflow writes the record without performing or
+  managing the installation. That keeps the tracing linkage while
+  leaving installation to the user, at the cost of an extra manual
+  step and the risk that the declared coordinates do not match what
+  was actually installed. Should this RFC include full installation,
+  only the tracing-activation command, or the activation command now
+  with installation as follow-on work?
 - **Digest-based linking.** `SKILL` spans are shown recording the
   content digest alongside `name` and `version`. On the automatic
   paths the instrumentation has the digest from resolution or install;
