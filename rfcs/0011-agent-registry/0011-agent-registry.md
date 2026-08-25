@@ -75,17 +75,26 @@ SDK namespace, following the pattern of RFC-0004 and RFC-0008:
   configuration snapshot, or an A2A Agent Card. Each change to composition is a
   new version.
 
-Agent versions are registry-minted serial numbers (1, 2, 3),
-following the policy the earlier registries establish: a registry
-entry adopts the underlying artifact's own version when its format
-defines one (RFC-0004's `server_json`, RFC-0008's plugin manifests)
-and mints serial numbers when it does not (RFC-0008's skills, whose
-format defines no version field). No standard agent artifact defines
-an inherent agent version. An A2A Agent Card carries a
-provider-defined `version` string, but the card is optional and the
-A2A specification leaves that field's format to the provider, so it
-is preserved in the canonical payload as descriptive metadata rather
-than adopted as version identity.
+Version identity is a per-agent choice made when the agent is
+created: `monotonic` (registry-assigned serial numbers: 1, 2, 3),
+`semver` (registrant-supplied semantic versions), or `freeform`
+(registrant-supplied opaque strings). `monotonic` is the default
+when registration supplies no version, so the simple path stays as
+simple as the Skill Registry's: registrants who never think about
+versioning get serial numbers automatically, while an agent that
+already carries its own versioning (a team's release train, a
+provider-versioned A2A agent) can keep it. The scheme may also be
+autodetected from the first registration's input. This refines the
+policy the earlier registries establish, where an entry adopts the
+underlying artifact's version when its format defines one
+(RFC-0004's `server_json`, RFC-0008's plugin manifests) and mints
+serial numbers when it does not (RFC-0008's skills): no standard
+agent artifact defines an inherent agent version, so minting is the
+default rather than the rule. An A2A card's provider-defined
+`version` string is preserved in the canonical payload either way;
+an agent registered under `semver` or `freeform` may mirror it.
+Aliases and `latest` resolution are well defined for `monotonic`
+and `semver`; `freeform` versions order by registration time.
 
 BOM entries are soft references, structured values rather than
 foreign keys. They resolve against the Skill Registry (which
@@ -335,8 +344,10 @@ the record.
    anchor: source provenance, a configuration snapshot, or an A2A
    Agent Card. Composition (the BOM) is required for source- and
    config-anchored registrations and may be empty or partial for
-   card-anchored ones (see below). Optional: tags and an endpoint
-   (a URL plus protocol; the endpoint journey below covers
+   card-anchored ones (see below). Optional: tags, an explicit
+   version where the agent's version scheme takes one (the default
+   `monotonic` scheme assigns versions automatically), and an
+   endpoint (a URL plus protocol; the endpoint journey below covers
    bindings).
 2. MLflow creates an `AgentVersion` record with initial status
    `draft`.
