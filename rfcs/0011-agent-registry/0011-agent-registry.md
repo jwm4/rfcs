@@ -70,9 +70,9 @@ SDK namespace, following the pattern of RFC-0004 and RFC-0008:
   configurations of a packaged harness, a harness reference (a
   proposed axis; see [Open questions](#open-questions)). Each
   version also carries at least one **definitional anchor**: source
-  provenance (a typed source pointer as in RFC-0008: a Git repo and
-  ref, an OCI image, or an archive), an immutable configuration
-  snapshot, or an A2A Agent Card. Each change to composition is a
+  provenance (one or more typed source pointers as in RFC-0008: a
+  Git repo and ref, an OCI image, an archive), an immutable
+  configuration snapshot, or an A2A Agent Card. Each change to composition is a
   new version.
 
 Agent versions are registry-minted serial numbers (1, 2, 3),
@@ -175,10 +175,13 @@ from mlflow.genai import GitSource
 mlflow.genai.register_agent(
     name="acme/billing-agent",
     description="Answers customer billing questions.",
-    source=GitSource(
-        url="https://github.com/acme/billing-agent.git",
-        ref="8f4e2a1",
-    ),
+    sources=[
+        GitSource(
+            url="https://github.com/acme/billing-agent.git",
+            ref="8f4e2a1",
+        ),
+        OciSource("quay.io/acme/billing-agent@sha256:9f2c1e"),
+    ],
     skills=["skills:/billing-policy/1", "skills:/refund-rules/2"],
     agent_plugins=["agent-plugins:/billing-workflow/1.2.0"],
     mcp_servers=["mcp-servers:/acme.internal/payments-db/2.0.0"],
@@ -187,9 +190,12 @@ mlflow.genai.register_agent(
 ```
 
 This creates the `Agent` (if new) and an `AgentVersion` with status
-`draft`. `GitSource` is one of the typed source pointers shared
-with RFC-0008; an agent distributed as a container image or an
-archive registers with the corresponding source type instead.
+`draft`. `GitSource` and `OciSource` are typed source pointers as
+in RFC-0008. A version may record multiple sources; here, the Git
+repo the agent is built from and the container image it ships as.
+Unlike skill versions, which carry exactly one source, agent
+versions allow several (see [Open questions](#open-questions) for
+the rationale).
 
 ## Register an agent from an A2A Agent Card
 
@@ -316,10 +322,10 @@ the record.
    mlflow.genai.register_agent(
        name="acme/billing-agent",
        description="Answers customer billing questions.",
-       source=GitSource(
+       sources=[GitSource(
            url="https://github.com/acme/billing-agent.git",
            ref="8f4e2a1",
-       ),
+       )],
        skills=["skills:/billing-policy/1"],
        mcp_servers=["mcp-servers:/acme.internal/payments-db/2.0.0"],
        models=["models:/acme-billing-llm/3"],
@@ -617,7 +623,9 @@ every affected agent without inspecting deployments one by one.
 
 The same query works for the other BOM axes: "which agents use MCP
 server Y whose tool schema changed?" and "which agents call model Z
-being retired?" Agent plugin references expand through their
+being retired?" Source entries are queryable the same way: "which
+agents ship OCI image X?" is the container-CVE variant of this
+journey. Agent plugin references expand through their
 members: RFC-0008 plugin versions immutably record which registered
 skills they contain, so "which agents use skill X" also finds
 agents that consume X through a plugin, rather than leaving a
@@ -782,6 +790,20 @@ TBD.
     governs?
   - Does configuration-as-artifact belong in this RFC or a
     follow-on?
+
+- **Should a version record multiple sources?** This RFC says yes: a
+  version's source provenance is a list of typed pointers, so an
+  agent built from a Git repo and shipped as an OCI image records
+  both, and source entries are queryable like BOM axes ("which
+  agents ship image X?"). This deliberately diverges from RFC-0008,
+  where each skill version has exactly one source and the content
+  digest reconciles identical content registered from different
+  sources. Agents have no defined content bundle to digest, so the
+  skill pattern applied to agents would produce irreconcilable
+  duplicate versions of what is really one agent. The list is
+  currently an unordered set of asserted pointers. Reviewers who
+  weigh cross-registry consistency
+  heavily should push back here if the divergence is not worth it.
 
 - **What is the BOM reference format?** The journeys sketch URI-style
   references (`skills:/billing-policy/1`,
