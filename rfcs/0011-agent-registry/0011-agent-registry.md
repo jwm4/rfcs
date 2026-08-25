@@ -70,7 +70,8 @@ SDK namespace, following the pattern of RFC-0004 and RFC-0008:
   configurations of a packaged harness, a harness reference (a
   proposed axis; see [Open questions](#open-questions)). Each
   version also carries at least one **definitional anchor**: source
-  provenance (Git URI plus commit), an immutable configuration
+  provenance (a typed source pointer as in RFC-0008: a Git repo and
+  ref, an OCI image, or an archive), an immutable configuration
   snapshot, or an A2A Agent Card. Each change to composition is a
   new version.
 
@@ -89,7 +90,7 @@ rather than by agent anatomy: an agent's prompt strategy or memory
 configuration has no axis because nothing governs one. Three layers
 share the job of describing an agent. Structured BOM references are
 selective but queryable across agents. Definitional anchors (a source
-commit, a configuration snapshot) are complete but opaque: they
+pointer, a configuration snapshot) are complete but opaque: they
 capture everything about one agent without supporting cross-agent
 queries. Free-form tags are the catch-all for facts that fit neither,
 and there will always be some, because agents acquire new kinds of
@@ -174,7 +175,9 @@ mlflow.genai.register_agent(
 ```
 
 This creates the `Agent` (if new) and an `AgentVersion` with status
-`draft`.
+`draft`. `GitSource` is one of the typed source pointers shared
+with RFC-0008; an agent distributed as a container image or an
+archive registers with the corresponding source type instead.
 
 ## Register an agent from an A2A Agent Card
 
@@ -394,8 +397,8 @@ the immutable version.
 
 The harness path is the newest part of this design and the least
 settled (see [Open questions](#open-questions)). For framework-built
-and custom agents, the source commit is the natural complete record
-and remains the expected anchor. For harness-based agents, requiring
+and custom agents, the registered source is the natural complete
+record and remains the expected anchor. For harness-based agents, requiring
 source would force registrations that point at the harness vendor's
 repository, which identifies nothing about the specific agent, while
 the configuration that actually defines it went unrecorded.
