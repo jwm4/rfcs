@@ -75,6 +75,18 @@ SDK namespace, following the pattern of RFC-0004 and RFC-0008:
   snapshot, or an A2A Agent Card. Each change to composition is a
   new version.
 
+Agent versions are registry-minted serial numbers (1, 2, 3),
+following the policy the earlier registries establish: a registry
+entry adopts the underlying artifact's own version when its format
+defines one (RFC-0004's `server_json`, RFC-0008's plugin manifests)
+and mints serial numbers when it does not (RFC-0008's skills, whose
+format defines no version field). No standard agent artifact defines
+an inherent agent version. An A2A Agent Card carries a
+provider-defined `version` string, but the card is optional and the
+A2A specification leaves that field's format to the provider, so it
+is preserved in the canonical payload as descriptive metadata rather
+than adopted as version identity.
+
 BOM entries are soft references, structured values rather than
 foreign keys. They resolve against the Skill Registry (which
 RFC-0008 defines for both skills and agent plugins), MCP Server
