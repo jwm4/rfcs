@@ -62,7 +62,9 @@ SDK namespace, following the pattern of RFC-0004 and RFC-0008:
   `{workspace, organization, name}` coordinates is a detailed-design
   point.
 - **AgentVersion**: an immutable snapshot of the agent's composition,
-  its **bill of materials (BOM)**: skill references, MCP server
+  its **bill of materials (BOM)**: skill references, agent plugin
+  references (a plugin is referenced as a composed unit and expands
+  through its registered members for queries), MCP server
   references, model references (registry models or external model
   identifiers such as `gpt-4o`), and, for agents that run as
   configurations of a packaged harness, a harness reference (a
@@ -73,7 +75,8 @@ SDK namespace, following the pattern of RFC-0004 and RFC-0008:
   new version.
 
 BOM entries are soft references, structured values rather than
-foreign keys. They resolve against the Skill Registry, MCP Server
+foreign keys. They resolve against the Skill Registry (which
+RFC-0008 defines for both skills and agent plugins), MCP Server
 Registry, and Model Registry when matching entries exist, and they
 remain valid when they do not. This is what makes cross-registry
 questions ("which agents use skill X?") answerable as registry
@@ -164,6 +167,7 @@ mlflow.genai.register_agent(
         ref="8f4e2a1",
     ),
     skills=["skills:/billing-policy/1", "skills:/refund-rules/2"],
+    agent_plugins=["agent-plugins:/billing-workflow/1.2.0"],
     mcp_servers=["mcp-servers:/acme.internal/payments-db/2.0.0"],
     models=["models:/acme-billing-llm/3", "gpt-4o"],
 )
@@ -316,8 +320,8 @@ the record.
 2. MLflow creates an `AgentVersion` record with initial status
    `draft`.
 3. The agent appears in the registry listing for its workspace, with
-   its BOM entries linked to the Skill, MCP, and Model registry pages
-   where matching entries exist.
+   its BOM entries linked to the skill, agent plugin, MCP server,
+   and model registry pages where matching entries exist.
 4. **A2A path:** an agent that has an Agent Card registers by
    importing it. The UI registration form offers two modes, "import
    from A2A card" and "manual"; the import mode pre-fills
@@ -598,7 +602,11 @@ every affected agent without inspecting deployments one by one.
 
 The same query works for the other BOM axes: "which agents use MCP
 server Y whose tool schema changed?" and "which agents call model Z
-being retired?" Because BOM entries are structured soft references,
+being retired?" Agent plugin references expand through their
+members: RFC-0008 plugin versions immutably record which registered
+skills they contain, so "which agents use skill X" also finds
+agents that consume X through a plugin, rather than leaving a
+blind spot behind composed units. Because BOM entries are structured soft references,
 the query is a registry lookup with exact-match semantics rather than
 a scan of running infrastructure. Because a BOM holds many refs per
 axis, the name and version predicates must bind to the same BOM
@@ -771,7 +779,6 @@ TBD.
   references are soft (string-resolved, valid when
   the target is unregistered), which URI syntax may misleadingly
   suggest otherwise. Alternatives include structured
-  `{registry, name, version}` objects. Relatedly: should the BOM be
-  able to reference agent plugins (RFC-0008/RFC-0010) as composed
-  units, and should it be able to reference other agents to represent
-  multi-agent systems?
+  `{registry, name, version}` objects. Relatedly: should the BOM
+  also be able to reference other agents, to represent multi-agent
+  systems?
