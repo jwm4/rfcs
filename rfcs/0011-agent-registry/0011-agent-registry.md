@@ -504,8 +504,10 @@ versions.
 
 ### Version an agent and compare bills of materials
 
-A developer iterating on an agent changes its composition and needs
-to see exactly what changed between two builds.
+A developer iterating on an agent registers each change as a new
+version. Later, when behavior shifts, whoever is investigating, and
+it is often not the person who made the change, compares two
+versions to see exactly what differs.
 
 1. The developer updates the agent: bumps a skill version, adds an
    MCP server, or swaps a model.
@@ -523,11 +525,16 @@ to see exactly what changed between two builds.
    Registry entries, where their own version histories and changelogs
    live.
 
-Immutable versions are what make the diff trustworthy: the comparison
-reflects what was registered, not what a mutable record has drifted
-into. Combined with the evaluation comparison in the next journey,
-this answers the two-part question every regression investigation
-starts with: what changed, and did it matter?
+Immutable versions are what make the diff trustworthy: the
+comparison reflects what was registered, not what a mutable record
+has drifted into. The diff is a shared record of declared changes:
+its value is that a teammate, reviewer, or security engineer can
+see what differs in the declarations for two versions without
+depending on the change author's memory or availability. Combined
+with the evaluation comparison in the next journey, it gives an
+investigation its starting facts: what changed, and did it matter?
+Discovering changes that nobody declared belongs to the deferred
+auto-discovery work (see Out of scope).
 
 Whether a change is a new version or a new agent is the
 registrant's call, the same judgment developers already make for
