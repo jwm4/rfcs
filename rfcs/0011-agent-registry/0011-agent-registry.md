@@ -282,6 +282,7 @@ mlflow.genai.evaluate(
     data=eval_dataset,
     scorers=[correctness_scorer],
     agent_id="acme/billing-agent",
+    agent_version=3,
 )
 ```
 
@@ -554,7 +555,8 @@ organized by agent and version, not by experiment.
    ```python
    mlflow.genai.evaluate(data=eval_dataset,
                          scorers=[correctness_scorer],
-                         agent_id="acme/billing-agent")
+                         agent_id="acme/billing-agent",
+                         agent_version=3)
    ```
 3. Open the agent's detail page. A Traces tab shows the agent's
    traces, filterable by version; an Evaluations tab shows eval runs;
