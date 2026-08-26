@@ -529,6 +529,13 @@ into. Combined with the evaluation comparison in the next journey,
 this answers the two-part question every regression investigation
 starts with: what changed, and did it matter?
 
+Whether a change is a new version or a new agent is the
+registrant's call, the same judgment developers already make for
+any software: is this a new release of the same application, or a
+different application? The registry enforces no rule; the practical
+consequence of the choice is that version comparison exists only
+within one agent.
+
 ### Develop against agent-centric traces and evaluations
 
 A developer evaluating agent quality wants traces and eval results
