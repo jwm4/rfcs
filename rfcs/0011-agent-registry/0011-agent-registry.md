@@ -599,7 +599,11 @@ arrangement. A deployment that needs its traces kept separate from
 other deployments of the same agent (a different owner or user
 base) overrides the destination in its own configuration; because
 permissions are experiment-scoped, separation is done with
-destinations, not trace tags. To keep such traces findable from the
+destinations, not trace tags. Versions share the agent's experiment
+for the same reason seen from the other side: a version is an
+analysis dimension recorded on every trace, not an access boundary,
+and per-version experiments would break the longitudinal view of an
+agent's behavior across upgrades. To keep such traces findable from the
 agent's registry page, this RFC proposes that a deployment using a
 non-default experiment notify the registry, which records the
 experiment ID on that deployment's access binding. A deployment
