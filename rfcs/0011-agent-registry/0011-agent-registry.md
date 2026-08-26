@@ -588,6 +588,26 @@ experiment-based workflows (including model training and
 fine-tuning) continue unchanged. The change is additive, not a data
 model rewrite.
 
+The default experiment is a default, not a router. A running agent
+logs traces to whatever destination its own deployment
+configuration sets; the registry is not in the call path. When
+nothing is set, traces land in the agent's default experiment,
+which is the right behavior for the development loop and
+registry-driven evaluations. Scale-out replicas of one deployment
+share its configuration, so their traces aggregate without further
+arrangement. A deployment that needs its traces kept separate from
+other deployments of the same agent (a different owner or user
+base) overrides the destination in its own configuration; because
+permissions are experiment-scoped, separation is done with
+destinations, not trace tags. To keep such traces findable from the
+agent's registry page, this RFC proposes that a deployment using a
+non-default experiment notify the registry, which records the
+experiment ID on that deployment's access binding. A deployment
+with no binding would need another place to record the link, which
+is one reason this mechanism is a proposal rather than settled.
+Automating the setup and upkeep of these links at deploy time
+belongs to the deferred registry synchronization glue.
+
 No endpoint is needed for any of this when the developer has the
 agent's code: the agent runs locally or in CI, autologging captures
 traces during execution, and evaluation scores outputs against a test
@@ -715,10 +735,11 @@ rejection.
   agents. Access bindings record where an approved endpoint is; they
   do not create it.
 - **Registry synchronization from deployments.** Auto-registering
-  agents when they deploy, and keeping BOMs fresh when composition
-  changes at deploy time, calls for platform-side glue (for example a
-  Kubernetes controller) pushing to the registry APIs this RFC
-  defines. Deferred.
+  agents when they deploy, keeping BOMs fresh when composition
+  changes at deploy time, and maintaining deployment trace-location
+  links (see the trace journey) calls for platform-side glue (for
+  example a Kubernetes controller) pushing to the registry APIs
+  this RFC defines. Deferred.
 - **Auto-discovery of composition.** BOMs are developer-asserted in
   the MVP. Inferring actual composition from traces (for example,
   from RFC-0009 `SKILL` spans) and notifying owners when assertion
