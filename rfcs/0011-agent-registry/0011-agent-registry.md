@@ -71,9 +71,10 @@ SDK namespace, following the pattern of RFC-0004 and RFC-0008:
   proposed axis; see [Open questions](#open-questions)). Each
   version also carries at least one **definitional anchor**: source
   provenance (one or more typed source pointers as in RFC-0008: a
-  Git repo and ref, an OCI image, an archive), an immutable
-  configuration snapshot, or an A2A Agent Card. Each change to composition is a
-  new version.
+  Git repo and ref, an OCI image, an archive) and/or an immutable
+  configuration snapshot. An agent registered from an A2A endpoint
+  alone is an interface-only record with no anchor (see below).
+  Each change to composition is a new version.
 
 Version identity is a per-agent choice made when the agent is
 created: `monotonic` (registry-assigned serial numbers: 1, 2, 3),
@@ -91,7 +92,7 @@ underlying artifact's version when its format defines one
 serial numbers when it does not (RFC-0008's skills): no standard
 agent artifact defines an inherent agent version, so minting is the
 default rather than the rule. An A2A card's provider-defined
-`version` string is preserved in the canonical payload either way;
+`version` string lives on the live card rather than in the registry;
 an agent registered under `semver` or `freeform` may mirror it.
 Aliases and `latest` resolution are well defined for `monotonic`
 and `semver`; `freeform` versions order by registration time.
@@ -118,17 +119,27 @@ and there will always be some, because agents acquire new kinds of
 parts faster than any schema anticipates. New structured axes are
 expected as the governance surface grows.
 
-**A2A Agent Cards are the canonical interchange payload when
-present.** The [A2A protocol](https://a2a-protocol.org/) defines the
-Agent Card schema that much of the industry has converged on for
-describing an agent's identity, capabilities, and endpoint. Following
-the hybrid storage pattern of RFC-0004 (`server_json`) and RFC-0008
-(`plugin.json`), an agent version registered from an Agent Card
-preserves the complete card immutably, with MLflow-managed fields
-(BOM, lifecycle, tags, aliases) kept outside the canonical payload.
-The card is optional: agents that do not speak A2A register with
-plain metadata, and gain a card later if they adopt one. Whether the
-card should instead be required or synthesized is an open question.
+**A2A Agent Cards are fetched, not stored.** The
+[A2A protocol](https://a2a-protocol.org/) makes an agent's endpoint
+the authoritative home of its Agent Card: the live card is always
+one GET away at the endpoint's well-known path, and every A2A
+client reads it from there. The registry follows suit. Registering
+from an endpoint imports the card's descriptive metadata
+(description, capabilities, and its free-form name, which seeds the
+mutable MLflow-managed `display_name`) into ordinary registry
+fields and creates an `a2a` access binding; the card content itself
+is not persisted. The UI renders the card read-only by fetching it
+through the binding at view time, so what MLflow displays can never
+drift from what the agent serves. This deliberately departs from
+the canonical-payload pattern of RFC-0004 (`server_json`) and
+RFC-0008 (`plugin.json`): MLflow is the system of record for those
+payloads, while an Agent Card's system of record is the agent
+itself. An agent registered from an endpoint alone, with no source
+and no configuration snapshot, is an **interface-only record**: the
+registry captures the claim surface (identity, imported metadata,
+endpoint) and marks that it holds no definitional anchor. Whether
+registration and lifecycle events should optionally capture a card
+copy as audit evidence is an open question.
 
 **Endpoints are access bindings, not version fields.** Some agents
 are reachable at a URL (A2A agents inherently; deployed agents
@@ -156,8 +167,9 @@ change is additive: under the hood an agent owns a default
 experiment, the agent location resolves to it, and experiment-based
 workflows continue unchanged.
 
-**Relationship to other RFCs.** RFC-0004 establishes the canonical
-payload and access binding patterns this RFC reuses. RFC-0008 defines
+**Relationship to other RFCs.** RFC-0004 establishes the access
+binding pattern this RFC reuses (its canonical-payload pattern is
+deliberately not applied to Agent Cards; see above). RFC-0008 defines
 the skills and agent plugins that agent BOMs reference; note that an
 *agent plugin* (a package of components installed into a harness) is
 not an *agent* (an application that acts); this registry governs the
@@ -217,20 +229,22 @@ mlflow.genai.register_agent(
 ```
 
 Given an endpoint, the client SDK fetches the Agent Card from the
-endpoint's well-known path, stores it immutably as the canonical
-payload and the version's definitional anchor (supplying
-description and capability metadata), and creates an `a2a` access
-binding for the endpoint. The registry `name` is always chosen by the
-registrant: an Agent Card's `name` is a free-form display string,
-not an identity, so it feeds presentation rather than naming.
-Following RFC-0004's pattern for `server_json["title"]`, the UI
-falls back to the card's name when the mutable MLflow-managed
-`display_name` is unset, and to the registry `name` after that. The card is whatever the running agent serves; it
-need not exist as a static file anywhere. The fetch always happens in
-the client: the registry server never fetches user-supplied URLs,
-consistent with RFC-0008. A caller that wants to inspect or adjust
-card metadata before registering can fetch the card itself and pass
-it via `a2a_card=` instead.
+endpoint's well-known path, imports its descriptive metadata
+(description, capabilities, and its free-form name, which seeds the
+mutable MLflow-managed `display_name`), and creates an `a2a` access
+binding for the endpoint. The card content is not persisted: the
+endpoint is the card's system of record, and the UI renders the
+card read-only by fetching it through the binding at view time. The
+registry `name` is always chosen by the registrant, since a card's
+`name` is a display string, not an identity. The card is whatever
+the running agent serves; it need not exist as a static file
+anywhere. Fetches always happen in the client or the browser: the
+registry server never fetches user-supplied URLs, consistent with
+RFC-0008. A caller that wants to inspect or adjust the imported
+metadata before registering can fetch the card itself and pass it
+via `a2a_card=` instead. A version registered this way, with no
+source and no configuration snapshot, is an interface-only record
+(see the register journey).
 
 ## Register a harness-based agent
 
@@ -340,11 +354,14 @@ the record.
        models=["models:/acme-billing-llm/3"],
    )
    ```
-   Required: name, description, and at least one definitional
-   anchor: source provenance, a configuration snapshot, or an A2A
-   Agent Card. Composition (the BOM) is required for source- and
-   config-anchored registrations and may be empty or partial for
-   card-anchored ones (see below). Optional: tags, an explicit
+   Required: name, description, and at least one of: a definitional
+   anchor (source provenance or a configuration snapshot) or an A2A
+   endpoint. These combine freely; a first-party A2A agent registers
+   with both source and endpoint. Only a registration with an
+   endpoint and no anchor produces an interface-only record (see
+   below). Composition (the BOM) is required when an anchor is
+   present and may be empty or partial for interface-only records
+   (see below). Optional: tags, an explicit
    version where the agent's version scheme takes one (the default
    `monotonic` scheme assigns versions automatically), and an
    endpoint (a URL plus protocol; the endpoint journey below covers
@@ -354,20 +371,21 @@ the record.
 3. The agent appears in the registry listing for its workspace, with
    its BOM entries linked to the skill, agent plugin, MCP server,
    and model registry pages where matching entries exist.
-4. **A2A path:** an agent that has an Agent Card registers by
-   importing it. The UI registration form offers two modes, "import
+4. **A2A path:** an agent that serves an Agent Card registers from
+   its endpoint. The UI registration form offers two modes, "import
    from A2A card" and "manual"; the import mode pre-fills
-   descriptive and capability fields from the card, stores the card
-   as the immutable canonical payload, and creates an `a2a` access
-   binding for the card's endpoint. The registry `name` is supplied by the
-   registrant on this path too: the card's free-form name is
-   presentation, not identity, and reaches the UI through the
-   display-name fallback chain (RFC-0004's `title` pattern). In the SDK and CLI, the client fetches the
-   card from the agent's endpoint; in the UI, the card is fetched by
-   the browser when the endpoint permits it, or pasted, since the
-   registry server never fetches user-supplied URLs (consistent with
-   RFC-0008). The BOM is supplied alongside the card, since the card
-   schema does not carry component version pins.
+   descriptive and capability fields from the card (its free-form
+   name seeds the mutable `display_name`; the registry `name` is
+   supplied by the registrant) and creates an `a2a` access binding
+   for the endpoint. The card content is not persisted: the agent
+   detail page renders the card read-only by fetching it through
+   the binding, so the display never drifts from what the agent
+   serves. In the SDK and CLI, the client fetches the card at
+   import; in the UI, the browser fetches it when the endpoint
+   permits, or the user pastes it, since the registry server never
+   fetches user-supplied URLs (consistent with RFC-0008). The BOM
+   is supplied alongside, since the card schema does not carry
+   component version pins.
 5. **CI path:** the same call runs from a pipeline, registering a new
    version on each release build with the source ref set to the
    build's commit.
@@ -412,13 +430,16 @@ Composition is required wherever it is knowable, because the BOM is
 the value: a registry record without composition is just a name in
 a list. A registrant anchoring on source or a configuration
 snapshot has the composition in front of them, so the requirement
-holds there. A card-anchored registration is different: the
-registrant of a vendor or partner agent cannot know which skills,
-servers, and models are inside a black box, and forcing a
-declaration would invite invented BOMs that pollute cross-registry
-queries. For card-anchored registrations the BOM may therefore be
-empty or partial, and an absent BOM is recorded as *undeclared*
-composition, not as an empty dependency list. Everything else is
+holds there. An interface-only registration (an A2A endpoint with
+no source or configuration snapshot) is different: the registrant
+of a vendor or partner agent cannot know which skills, servers, and
+models are inside a black box, and forcing a declaration would
+invite invented BOMs that pollute cross-registry queries. For
+interface-only records the BOM may therefore be empty or partial,
+an absent BOM is recorded as *undeclared* composition, not as an
+empty dependency list, and the record itself is marked as holding
+no definitional anchor: the registry knows the agent's claim
+surface, not its contents. Everything else is
 progressive enrichment. The endpoint URL is optional; the
 trace-and-eval journey below explains which agents need one. When
 provided, the URL becomes an access binding rather than a field on
@@ -427,7 +448,8 @@ the immutable version.
 The harness path is the newest part of this design and the least
 settled (see [Open questions](#open-questions)). For framework-built
 and custom agents, the registered source is the natural complete
-record and remains the expected anchor. For harness-based agents, requiring
+record and remains the expected anchor. For harness-based agents,
+requiring
 source would force registrations that point at the harness vendor's
 repository, which identifies nothing about the specific agent, while
 the configuration that actually defines it went unrecorded.
@@ -640,7 +662,8 @@ journey. Agent plugin references expand through their
 members: RFC-0008 plugin versions immutably record which registered
 skills they contain, so "which agents use skill X" also finds
 agents that consume X through a plugin, rather than leaving a
-blind spot behind composed units. Because BOM entries are structured soft references,
+blind spot behind composed units. Because BOM entries are
+structured soft references,
 the query is a registry lookup with exact-match semantics rather than
 a scan of running infrastructure. Because a BOM holds many refs per
 axis, the name and version predicates must bind to the same BOM
@@ -654,8 +677,9 @@ owners is deliberately not in the MVP (see Out of scope).
 Coverage has two limits a reader of the results should keep in mind:
 the query sees only the component types the registry tracks, and
 within those, only what registrants declared. Agents with
-undeclared composition (black-box, card-anchored registrations) can
-never match, so results should surface them alongside matches: "3
+undeclared composition (black-box, interface-only registrations)
+can never match, so results should surface them alongside matches:
+"3
 agents declare the compromised skill; 12 more have undeclared
 composition." The query replaces infrastructure inspection for the
 governed axes; it does not claim completeness beyond them.
@@ -722,24 +746,19 @@ TBD.
 
 # Open questions
 
-- **How canonical is the A2A Agent Card?** This RFC treats the card
-  as canonical when present and optional overall. Arguments for
-  requiring it: industry convergence on the schema, and one canonical
-  payload instead of two metadata shapes. Arguments against: A2A
-  exists to let independent agents discover and interoperate with
-  agents they have never met, and a large share of production agents
-  today are single-agent applications or closed teams of agents that
-  already know each other, for which the card is a heavy dependency
-  whose primary purpose does not apply. Requiring it would also force
-  synthesized cards for manual registrations, and the card schema
-  carries no BOM, so MLflow-managed composition metadata exists
-  either way. Part of the same question is how thin a card-only
-  record may be: this RFC lets a card-anchored registration omit the
-  BOM (recorded as undeclared composition), since a black-box
-  agent's components are unknowable to its registrant. Is
-  canonical-when-present the right landing, and should registration
-  be able to synthesize a valid card from manual metadata for
-  export?
+- **Should events capture Agent Card evidence?** This RFC treats
+  the agent's endpoint as the card's system of record: cards are
+  fetched for display and imported for metadata, never persisted.
+  That leaves governance without any record of what an agent
+  claimed at the moment somebody acted on the claim. Should
+  registration and lifecycle transitions (for example, promotion to
+  `active`) optionally capture a copy of the card as audit evidence
+  attached to the event? That would give regulated environments
+  decision-time evidence without reintroducing a stored payload
+  that pretends to define the version. Relatedly, how thin may an
+  interface-only record be before it is not worth registering: is
+  identity, imported metadata, a binding, and undeclared
+  composition enough?
 
 - **Should agent-centric traces and evaluations be a separate RFC?**
   The experiments bridge (`agent_id` resolving to a default
