@@ -785,6 +785,20 @@ TBD.
 
 # Open questions
 
+- **Is the default experiment per agent or per agent-version?** This
+  RFC says per agent: a version is an analysis dimension recorded on
+  every trace, one experiment preserves the longitudinal view of an
+  agent's behavior across upgrades, and the agent-to-experiment
+  mapping stays one-to-one, with no version required to resolve a
+  destination. The opposing position, held by at least one reviewer,
+  is one default experiment per version, which partitions each
+  version's traces physically, at the cost of making cross-upgrade
+  monitoring a cross-experiment query and making the version a
+  required argument wherever a destination is resolved. Whichever
+  default is chosen, users who want the other behavior override it
+  per deployment, so the question is which behavior makes the better
+  default, not which is possible.
+
 - **How thin may an interface-only record be?** A black-box A2A
   agent registers with a name, metadata imported from its card, an
   access binding, undeclared composition, and no definitional
