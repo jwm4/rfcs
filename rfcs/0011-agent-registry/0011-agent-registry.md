@@ -137,9 +137,7 @@ payloads, while an Agent Card's system of record is the agent
 itself. An agent registered from an endpoint alone, with no source
 and no configuration snapshot, is an **interface-only record**: the
 registry captures the claim surface (identity, imported metadata,
-endpoint) and marks that it holds no definitional anchor. Whether
-registration and lifecycle events should optionally capture a card
-copy as audit evidence is an open question.
+endpoint) and marks that it holds no definitional anchor.
 
 **Endpoints are access bindings, not version fields.** Some agents
 are reachable at a URL (A2A agents inherently; deployed agents
@@ -748,19 +746,12 @@ TBD.
 
 # Open questions
 
-- **Should events capture Agent Card evidence?** This RFC treats
-  the agent's endpoint as the card's system of record: cards are
-  fetched for display and imported for metadata, never persisted.
-  That leaves governance without any record of what an agent
-  claimed at the moment somebody acted on the claim. Should
-  registration and lifecycle transitions (for example, promotion to
-  `active`) optionally capture a copy of the card as audit evidence
-  attached to the event? That would give regulated environments
-  decision-time evidence without reintroducing a stored payload
-  that pretends to define the version. Relatedly, how thin may an
-  interface-only record be before it is not worth registering: is
-  identity, imported metadata, a binding, and undeclared
-  composition enough?
+- **How thin may an interface-only record be?** A black-box A2A
+  agent registers with a name, metadata imported from its card, an
+  access binding, undeclared composition, and no definitional
+  anchor. Is that enough of a record to be worth governing, and
+  should the registry require anything more of it before such a
+  record can be promoted to `active`?
 
 - **Should agent-centric traces and evaluations be a separate RFC?**
   The experiments bridge (`agent_id` resolving to a default
