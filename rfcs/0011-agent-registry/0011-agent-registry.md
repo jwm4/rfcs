@@ -19,6 +19,7 @@
   - [User journeys](#user-journeys)
   - [Out of scope](#out-of-scope)
 - [Detailed design](#detailed-design)
+  - [Design positions](#design-positions)
 - [Drawbacks](#drawbacks)
 - [Alternatives](#alternatives)
 - [Adoption strategy](#adoption-strategy)
@@ -42,129 +43,22 @@ It completes a progression: MLflow can govern the tools an agent calls
 invokes (Model Registry), but the agent itself, the thing that acts,
 has no registry entry. This RFC adds one.
 
-**The registry is record-level, not runtime-aware.** It stores what
-an agent is, not whether it is running, healthy, or scaled. Runtime
-state belongs to the serving platform, which can join its own
-runtime inventory against registry records at query time. This is
-the same division of responsibility RFC-0004 draws between the MCP
-registry and a gateway.
-
-The registry manages two primary entities under the `mlflow.genai`
-SDK namespace, following the pattern of RFC-0004 and RFC-0008:
-
-- **Agent**: a named, owned entity with DNS-style naming
-  (`org/agent-name`), in the spirit of the namespaced names the MCP
-  and Skill registries use; exact alignment with RFC-0008's
-  `{workspace, organization, name}` coordinates is a detailed-design
-  point.
-- **AgentVersion**: an immutable snapshot of the agent's composition,
-  its **bill of materials (BOM)**: skill references, agent plugin
-  references (a plugin is referenced as a composed unit and expands
-  through its registered members for queries), MCP server
-  references, model references (registry models or external model
-  identifiers such as `gpt-4o`), and, for agents that run as
-  configurations of a packaged harness, a harness reference (a
-  proposed axis; see [Open questions](#open-questions)). Each
-  version also carries at least one **definitional anchor**: source
-  provenance (one or more typed source pointers as in RFC-0008: a
-  Git repo and ref, an OCI image, an archive) and/or an immutable
-  configuration snapshot. An agent registered from an A2A endpoint
-  alone is an interface-only record with no anchor (see below).
-  Each change to composition is a new version.
-
-Version identity is a per-agent choice made when the agent is
-created: `monotonic` (registry-assigned serial numbers: 1, 2, 3),
-`semver` (registrant-supplied semantic versions), or `freeform`
-(registrant-supplied opaque strings). `monotonic` is the default
-when registration supplies no version: registrants who never think
-about versioning get serial numbers automatically, while an agent
-that already carries its own versioning (a provider-versioned A2A
-agent, for example) can keep it. The scheme may also be
-autodetected from the first registration's input. This refines the
-policy the earlier registries establish, where an entry adopts the
-underlying artifact's version when its format defines one
-(RFC-0004's `server_json`, RFC-0008's plugin manifests) and mints
-serial numbers when it does not (RFC-0008's skills): no standard
-agent artifact defines an inherent agent version, so minting is the
-default rather than the rule. An A2A card's provider-defined
-`version` string lives on the live card rather than in the registry;
-an agent registered under `semver` or `freeform` may mirror it.
-Aliases and `latest` resolution are well defined for `monotonic`
-and `semver`; `freeform` versions order by registration time.
-
-BOM entries are soft references, structured values rather than
-foreign keys. They resolve against the Skill Registry (which
-RFC-0008 defines for both skills and agent plugins), MCP Server
-Registry, and Model Registry when matching entries exist, and they
-remain valid when they do not. This makes cross-registry questions
-("which agents use skill X?") answerable as registry queries
-without constraining registration order.
-
-**The BOM is a component inventory, not a complete recipe.** Its
-structured axes exist because corresponding registries or identifier
-conventions exist, so it is bounded by MLflow's governance surface
-rather than by agent anatomy: an agent's prompt strategy or memory
-configuration has no axis because nothing governs one. Three layers
-share the job of describing an agent. Structured BOM references are
-selective but queryable across agents. Definitional anchors (a source
-pointer, a configuration snapshot) are complete but opaque: they
-capture everything about one agent without supporting cross-agent
-queries. Free-form tags are the catch-all for facts that fit
-neither. New structured axes are expected as the governance surface
-grows.
-
-**A2A Agent Cards are fetched, not stored.** The
-[A2A protocol](https://a2a-protocol.org/) makes an agent's endpoint
-the authoritative home of its Agent Card: every A2A client reads
-the live card from the endpoint's well-known path, and the registry
-follows suit. Registering
-from an endpoint imports the card's descriptive metadata
-(description, capabilities, and its free-form name, which seeds the
-mutable MLflow-managed `display_name`) into ordinary registry
-fields and creates an `a2a` access binding; the card content itself
-is not persisted. The UI renders the card read-only by fetching it
-through the binding at view time, so what MLflow displays can never
-drift from what the agent serves. This deliberately departs from
-the canonical-payload pattern of RFC-0004 (`server_json`) and
-RFC-0008 (`plugin.json`): MLflow is the system of record for those
-payloads, while an Agent Card's system of record is the agent
-itself. An agent registered from an endpoint alone, with no source
-and no configuration snapshot, is an **interface-only record**: the
-registry captures the claim surface (identity, imported metadata,
-endpoint) and marks that it holds no definitional anchor.
-
-**Endpoints are access bindings, not version fields.** Some agents
-are reachable at a URL (A2A agents inherently; deployed agents
-generally), and recording that URL lets the registry drive tracing
-and evaluation for agents whose code the user cannot run. But
-endpoints change independently of composition, and agent versions are
-immutable. Following RFC-0004's `MCPAccessBinding` model, approved
-endpoints are separate mutable binding records that target a version
-or alias, created and deleted as connectivity changes without
-touching version history. Where an MCP binding's protocol is always
-MCP, an agent binding declares its protocol: `a2a`, `mcp` (for
-agents exposed as MCP servers), or `other`. Registration accepts an
-optional endpoint as a convenience that creates a binding.
-
-**Agents become the primary anchor for GenAI traces and
-evaluations.** Today traces and evaluation runs attach to
-experiments, an abstraction that fits model training but not the
-agent development loop. This RFC makes an agent a trace
-destination: a new `MlflowAgentLocation` joins the existing
-`MlflowExperimentLocation`, usable wherever MLflow accepts a trace
-destination today, and evaluation and trace-search APIs gain agent
-identity alongside experiment identity. A destination identifies
-the agent only and resolves to the agent's one default experiment;
-the version is never part of the destination and is instead
-recorded on every trace and evaluation run as metadata, which is
-what per-version filtering and comparison use. Traces and eval
-results appear on the agent's registry page, filterable by version.
-The change is additive: the default experiment exists under the
-hood, and experiment-based workflows continue unchanged.
+In brief, the design takes these positions, each stated in full in
+[Design positions](#design-positions): the registry is
+record-level, not runtime-aware; an agent's versions are immutable
+snapshots of its composition (a bill of materials of skills, agent
+plugins, MCP servers, and models) plus at least one definitional
+anchor (source pointers and/or a configuration snapshot); A2A Agent
+Cards are fetched from the agent's endpoint, never stored;
+endpoints are mutable, protocol-typed access bindings rather than
+version fields; and an agent is a trace destination with one
+default experiment, with the version recorded on every trace and
+evaluation run.
 
 **Relationship to other RFCs.** RFC-0004 establishes the access
 binding pattern this RFC reuses (its canonical-payload pattern is
-deliberately not applied to Agent Cards; see above). RFC-0008 defines
+deliberately not applied to Agent Cards; see
+[Design positions](#design-positions)). RFC-0008 defines
 the skills and agent plugins that agent BOMs reference; note that an
 *agent plugin* (a package of components installed into a harness) is
 not an *agent* (an application that acts); this registry governs the
@@ -755,7 +649,131 @@ rejection.
 
 # Detailed design
 
-TBD.
+## Design positions
+
+The following positions are settled enough to draft against; the
+remainder of the detailed design is TBD.
+
+**The registry is record-level, not runtime-aware.** It stores what
+an agent is, not whether it is running, healthy, or scaled. Runtime
+state belongs to the serving platform, which can join its own
+runtime inventory against registry records at query time. This is
+the same division of responsibility RFC-0004 draws between the MCP
+registry and a gateway.
+
+The registry manages two primary entities under the `mlflow.genai`
+SDK namespace, following the pattern of RFC-0004 and RFC-0008:
+
+- **Agent**: a named, owned entity with DNS-style naming
+  (`org/agent-name`), in the spirit of the namespaced names the MCP
+  and Skill registries use; exact alignment with RFC-0008's
+  `{workspace, organization, name}` coordinates is a detailed-design
+  point.
+- **AgentVersion**: an immutable snapshot of the agent's composition,
+  its **bill of materials (BOM)**: skill references, agent plugin
+  references (a plugin is referenced as a composed unit and expands
+  through its registered members for queries), MCP server
+  references, model references (registry models or external model
+  identifiers such as `gpt-4o`), and, for agents that run as
+  configurations of a packaged harness, a harness reference (a
+  proposed axis; see [Open questions](#open-questions)). Each
+  version also carries at least one **definitional anchor**: source
+  provenance (one or more typed source pointers as in RFC-0008: a
+  Git repo and ref, an OCI image, an archive) and/or an immutable
+  configuration snapshot. An agent registered from an A2A endpoint
+  alone is an interface-only record with no anchor (see below).
+  Each change to composition is a new version.
+
+Version identity is a per-agent choice made when the agent is
+created: `monotonic` (registry-assigned serial numbers: 1, 2, 3),
+`semver` (registrant-supplied semantic versions), or `freeform`
+(registrant-supplied opaque strings). `monotonic` is the default
+when registration supplies no version: registrants who never think
+about versioning get serial numbers automatically, while an agent
+that already carries its own versioning (a provider-versioned A2A
+agent, for example) can keep it. The scheme may also be
+autodetected from the first registration's input. This refines the
+policy the earlier registries establish, where an entry adopts the
+underlying artifact's version when its format defines one
+(RFC-0004's `server_json`, RFC-0008's plugin manifests) and mints
+serial numbers when it does not (RFC-0008's skills): no standard
+agent artifact defines an inherent agent version, so minting is the
+default rather than the rule. An A2A card's provider-defined
+`version` string lives on the live card rather than in the registry;
+an agent registered under `semver` or `freeform` may mirror it.
+Aliases and `latest` resolution are well defined for `monotonic`
+and `semver`; `freeform` versions order by registration time.
+
+BOM entries are soft references, structured values rather than
+foreign keys. They resolve against the Skill Registry (which
+RFC-0008 defines for both skills and agent plugins), MCP Server
+Registry, and Model Registry when matching entries exist, and they
+remain valid when they do not. This makes cross-registry questions
+("which agents use skill X?") answerable as registry queries
+without constraining registration order.
+
+**The BOM is a component inventory, not a complete recipe.** Its
+structured axes exist because corresponding registries or identifier
+conventions exist, so it is bounded by MLflow's governance surface
+rather than by agent anatomy: an agent's prompt strategy or memory
+configuration has no axis because nothing governs one. Three layers
+share the job of describing an agent. Structured BOM references are
+selective but queryable across agents. Definitional anchors (a source
+pointer, a configuration snapshot) are complete but opaque: they
+capture everything about one agent without supporting cross-agent
+queries. Free-form tags are the catch-all for facts that fit
+neither. New structured axes are expected as the governance surface
+grows.
+
+**A2A Agent Cards are fetched, not stored.** The
+[A2A protocol](https://a2a-protocol.org/) makes an agent's endpoint
+the authoritative home of its Agent Card: every A2A client reads
+the live card from the endpoint's well-known path, and the registry
+follows suit. Registering from an endpoint imports the card's
+descriptive metadata (description, capabilities, and its free-form
+name, which seeds the mutable MLflow-managed `display_name`) into
+ordinary registry fields and creates an `a2a` access binding; the
+card content itself is not persisted. The UI renders the card
+read-only by fetching it through the binding at view time, so what
+MLflow displays can never drift from what the agent serves. This
+deliberately departs from the canonical-payload pattern of RFC-0004
+(`server_json`) and RFC-0008 (`plugin.json`): MLflow is the system
+of record for those payloads, while an Agent Card's system of
+record is the agent itself. An agent registered from an endpoint
+alone, with no source and no configuration snapshot, is an
+**interface-only record**: the registry captures the claim surface
+(identity, imported metadata, endpoint) and marks that it holds no
+definitional anchor.
+
+**Endpoints are access bindings, not version fields.** Some agents
+are reachable at a URL (A2A agents inherently; deployed agents
+generally), and recording that URL lets the registry drive tracing
+and evaluation for agents whose code the user cannot run. But
+endpoints change independently of composition, and agent versions
+are immutable. Following RFC-0004's `MCPAccessBinding` model,
+approved endpoints are separate mutable binding records that target
+a version or alias, created and deleted as connectivity changes
+without touching version history. Where an MCP binding's protocol
+is always MCP, an agent binding declares its protocol: `a2a`, `mcp`
+(for agents exposed as MCP servers), or `other`. Registration
+accepts an optional endpoint as a convenience that creates a
+binding.
+
+**Agents become the primary anchor for GenAI traces and
+evaluations.** Today traces and evaluation runs attach to
+experiments, an abstraction that fits model training but not the
+agent development loop. This RFC makes an agent a trace
+destination: a new `MlflowAgentLocation` joins the existing
+`MlflowExperimentLocation`, usable wherever MLflow accepts a trace
+destination today, and evaluation and trace-search APIs gain agent
+identity alongside experiment identity. A destination identifies
+the agent only and resolves to the agent's one default experiment;
+the version is never part of the destination and is instead
+recorded on every trace and evaluation run as metadata, which is
+what per-version filtering and comparison use. Traces and eval
+results appear on the agent's registry page, filterable by version.
+The change is additive: the default experiment exists under the
+hood, and experiment-based workflows continue unchanged.
 
 # Drawbacks
 
