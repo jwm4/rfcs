@@ -91,11 +91,10 @@ content is recognized and preserved in packaged plugins but does not receive
 individual registry entries in this RFC. Agent plugin versions with no skill
 members, including MCP-only packages, are valid.
 
-Follow-up work currently tracked as
-[RFC-0009: Extended Skill Bundles](https://github.com/mlflow/rfcs/pull/27)
+Follow-up work tracked as
+[RFC-0010: Extended Agent Plugins](https://github.com/mlflow/rfcs/pull/27)
 will add registry entries for non-skill components such as subagents and MCP
-server references. Its existing draft will need to be revised around the
-canonical Agent Plugins model.
+server references.
 
 # Basic example
 
@@ -502,10 +501,9 @@ discovery/search operations.
   non-skill content. Standard `mcp.json` and adapter-specific content are
   recognized and preserved in packaged plugins, but this RFC does not create
   individual registry entries or membership rows for non-skill components.
-  Follow-up work currently tracked as
-  [RFC-0009: Extended Skill Bundles](https://github.com/mlflow/rfcs/pull/27)
-  will add those entries after its existing draft is revised around the
-  canonical Agent Plugins model. The registry backend is designed to be
+  Follow-up work tracked as
+  [RFC-0010: Extended Agent Plugins](https://github.com/mlflow/rfcs/pull/27)
+  will add those entries. The registry backend is designed to be
   extensible to these types.
 - **Artifact storage as the only path.** The registry supports both
   external source pointers (Git, OCI, ZIP) and direct artifact storage
@@ -647,11 +645,10 @@ appends `@<alias>` to the parent URI. An organization is marked by a leading
 identifies the organization by that marker rather than by inspecting whether a
 segment parses as SemVer.
 
-Follow-up work currently tracked as
-[RFC-0009: Extended Skill Bundles](https://github.com/mlflow/rfcs/pull/27)
+Follow-up work tracked as
+[RFC-0010: Extended Agent Plugins](https://github.com/mlflow/rfcs/pull/27)
 will add registry entries for non-skill components, enabling full
-multi-component agent plugins after its existing draft is revised around this
-canonical model.
+multi-component agent plugins.
 
 #### AgentPluginVersion
 
@@ -1254,10 +1251,8 @@ Code, and generic plugin import adapters.
 
 #### Future improvements
 
-- **Trace integration.** Trace linking, including
-  `mlflow.skill_context()`, automatic SKILL span instrumentation,
-  and `search_skill_traces()`, is planned as follow-up work. The trace
-  manifest mechanism depends on the installation RFC below.
+- **Trace integration.** Trace-to-skill linking is proposed in
+  [RFC-0009: Skill Tracing](https://github.com/mlflow/rfcs/pull/37).
 - **Installation and package manager integration.** Harness-specific
   installation commands, the package manager plugin interface, the
   `mlflow-skills.lock` resolution lock, and `install_count` will be
@@ -1265,7 +1260,7 @@ Code, and generic plugin import adapters.
 - **Registry entries for non-skill components.** Individual registry
   entries for non-skill content (e.g., subagents, MCP server references)
   are deferred to
-  [RFC-0009: Extended Skill Bundles](https://github.com/mlflow/rfcs/pull/27).
+  [RFC-0010: Extended Agent Plugins](https://github.com/mlflow/rfcs/pull/27).
 - **Agent setup integration.** Add an option to
   `uvx mlflow@latest agent setup` that teaches the agent how to query
   the MLflow skills registry for capabilities, similar to
