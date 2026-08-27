@@ -159,8 +159,13 @@ agent development loop. This RFC makes an agent a trace
 destination: a new `MlflowAgentLocation` joins the existing
 `MlflowExperimentLocation`, usable wherever MLflow accepts a trace
 destination today, and evaluation and trace-search APIs gain agent
-identity alongside experiment identity. Traces and eval results
-appear on the agent's registry page, filterable by version. The
+identity alongside experiment identity. A destination identifies
+the agent only and resolves to the agent's one default experiment;
+the version is never part of the destination and is instead
+recorded on every trace and evaluation run as metadata, which is
+what per-version filtering and comparison use. Traces and eval
+results appear on the agent's registry page, filterable by
+version. The
 change is additive: under the hood an agent owns a default
 experiment, the agent location resolves to it, and experiment-based
 workflows continue unchanged.
@@ -283,6 +288,12 @@ mlflow.genai.evaluate(
     agent_version=3,
 )
 ```
+
+`set_active_agent` does two separable things: it points the trace
+destination at the agent's one default experiment (the version
+plays no part in that), and it records the agent and version as
+metadata on everything emitted while it is active. The trace
+journey shows the underlying pieces.
 
 # Motivation
 
@@ -555,14 +566,25 @@ organized by agent and version, not by experiment.
    with mlflow.start_span(name="answer-question"):
        result = agent.run(question)
    ```
-   `set_active_agent` is convenience over MLflow's existing trace
-   destination mechanism: it wraps
-   `mlflow.tracing.set_destination(MlflowAgentLocation(...))`, the
-   way `set_experiment` establishes an experiment destination
-   today. The location can also be passed per span through
-   `start_span`'s existing `trace_destination` parameter. Framework
-   and harness autologgers respect the active destination, so
-   instrumented applications need only state which agent they are.
+   `set_active_agent` is convenience over two separable pieces.
+   First, it sets the trace destination to the agent's one default
+   experiment, equivalent to calling `mlflow.set_experiment` on the
+   result of
+   `mlflow.genai.get_default_experiment_id("acme/billing-agent")`,
+   where `get_default_experiment_id` is a public lookup that takes
+   only the agent: the version is never part of the destination. (An
+   `MlflowAgentLocation` naming the agent can likewise be passed
+   anywhere MLflow accepts a trace destination, including
+   `start_span`'s existing `trace_destination` parameter.) Second,
+   it records the agent and version as trace-level metadata, the way
+   session and user metadata are recorded today; this is what
+   per-version filtering and comparison use. A deployment that
+   overrides its destination (below) swaps only the first piece,
+   pointing `set_experiment` at its own experiment, and still
+   declares the agent and version so its traces stay labeled.
+   Framework and harness autologgers respect the active destination
+   and metadata, so instrumented applications need only state which
+   agent they are.
 2. Run evaluations against the agent:
    ```python
    mlflow.genai.evaluate(data=eval_dataset,
@@ -570,6 +592,10 @@ organized by agent and version, not by experiment.
                          agent_id="acme/billing-agent",
                          agent_version=3)
    ```
+   As with tracing, `agent_id` determines where the results land
+   (the agent's default experiment, unless overridden) and
+   `agent_version` is recorded on the evaluation run for filtering
+   and comparison.
 3. Open the agent's detail page. A Traces tab shows the agent's
    traces, filterable by version; an Evaluations tab shows eval runs;
    a summary card shows latest eval score and trace volume.
