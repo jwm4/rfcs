@@ -26,11 +26,10 @@
 
 # Summary
 
-Add an Agent Registry to MLflow: a governed, record-level registry for
-AI agents. The registry catalogs the agents an organization has built.
-It records each agent's identity, ownership, composition, source
-provenance, and lifecycle status, and it anchors the agent's traces
-and evaluation results. It answers "what agents exist, who owns them,
+Add an Agent Registry to MLflow: a governed, record-level registry
+that catalogs each agent's identity, ownership, composition, source
+provenance, and lifecycle status, and anchors the agent's traces and
+evaluation results. It answers "what agents exist, who owns them,
 what are they made of, and how well do they work?"
 
 The Agent Registry is the third registry in a series, following the
@@ -43,15 +42,12 @@ It completes a progression: MLflow can govern the tools an agent calls
 invokes (Model Registry), but the agent itself, the thing that acts,
 has no registry entry. This RFC adds one.
 
-**The registry is record-level, not runtime-aware.** It stores what an
-agent is: who built it, what components it is made of, where its
-source lives, and what lifecycle state it is in. It does not store
-whether the agent is running, healthy, or scaled. Runtime state
-belongs to the serving platform. A platform that deploys registered
-agents can join its own runtime inventory against registry records at
-query time; the registry supplies the governance half of that join.
-This is the same division of responsibility RFC-0004 draws between
-the MCP registry and a gateway.
+**The registry is record-level, not runtime-aware.** It stores what
+an agent is, not whether it is running, healthy, or scaled. Runtime
+state belongs to the serving platform, which can join its own
+runtime inventory against registry records at query time. This is
+the same division of responsibility RFC-0004 draws between the MCP
+registry and a gateway.
 
 The registry manages two primary entities under the `mlflow.genai`
 SDK namespace, following the pattern of RFC-0004 and RFC-0008:
@@ -80,11 +76,10 @@ Version identity is a per-agent choice made when the agent is
 created: `monotonic` (registry-assigned serial numbers: 1, 2, 3),
 `semver` (registrant-supplied semantic versions), or `freeform`
 (registrant-supplied opaque strings). `monotonic` is the default
-when registration supplies no version, so the simple path stays as
-simple as the Skill Registry's: registrants who never think about
-versioning get serial numbers automatically, while an agent that
-already carries its own versioning (a team's release train, a
-provider-versioned A2A agent) can keep it. The scheme may also be
+when registration supplies no version: registrants who never think
+about versioning get serial numbers automatically, while an agent
+that already carries its own versioning (a provider-versioned A2A
+agent, for example) can keep it. The scheme may also be
 autodetected from the first registration's input. This refines the
 policy the earlier registries establish, where an entry adopts the
 underlying artifact's version when its format defines one
@@ -101,9 +96,9 @@ BOM entries are soft references, structured values rather than
 foreign keys. They resolve against the Skill Registry (which
 RFC-0008 defines for both skills and agent plugins), MCP Server
 Registry, and Model Registry when matching entries exist, and they
-remain valid when they do not. This is what makes cross-registry
-questions ("which agents use skill X?") answerable as registry
-queries while keeping registration decoupled from registration order.
+remain valid when they do not. This makes cross-registry questions
+("which agents use skill X?") answerable as registry queries
+without constraining registration order.
 
 **The BOM is a component inventory, not a complete recipe.** Its
 structured axes exist because corresponding registries or identifier
@@ -114,16 +109,15 @@ share the job of describing an agent. Structured BOM references are
 selective but queryable across agents. Definitional anchors (a source
 pointer, a configuration snapshot) are complete but opaque: they
 capture everything about one agent without supporting cross-agent
-queries. Free-form tags are the catch-all for facts that fit neither,
-and there will always be some, because agents acquire new kinds of
-parts faster than any schema anticipates. New structured axes are
-expected as the governance surface grows.
+queries. Free-form tags are the catch-all for facts that fit
+neither. New structured axes are expected as the governance surface
+grows.
 
 **A2A Agent Cards are fetched, not stored.** The
 [A2A protocol](https://a2a-protocol.org/) makes an agent's endpoint
-the authoritative home of its Agent Card: the live card is always
-one GET away at the endpoint's well-known path, and every A2A
-client reads it from there. The registry follows suit. Registering
+the authoritative home of its Agent Card: every A2A client reads
+the live card from the endpoint's well-known path, and the registry
+follows suit. Registering
 from an endpoint imports the card's descriptive metadata
 (description, capabilities, and its free-form name, which seeds the
 mutable MLflow-managed `display_name`) into ordinary registry
@@ -164,11 +158,9 @@ the agent only and resolves to the agent's one default experiment;
 the version is never part of the destination and is instead
 recorded on every trace and evaluation run as metadata, which is
 what per-version filtering and comparison use. Traces and eval
-results appear on the agent's registry page, filterable by
-version. The
-change is additive: under the hood an agent owns a default
-experiment, the agent location resolves to it, and experiment-based
-workflows continue unchanged.
+results appear on the agent's registry page, filterable by version.
+The change is additive: the default experiment exists under the
+hood, and experiment-based workflows continue unchanged.
 
 **Relationship to other RFCs.** RFC-0004 establishes the access
 binding pattern this RFC reuses (its canonical-payload pattern is
@@ -239,15 +231,12 @@ binding for the endpoint. The card content is not persisted: the
 endpoint is the card's system of record, and the UI renders the
 card read-only by fetching it through the binding at view time. The
 registry `name` is always chosen by the registrant, since a card's
-`name` is a display string, not an identity. The card is whatever
-the running agent serves; it need not exist as a static file
-anywhere. Fetches always happen in the client or the browser: the
-registry server never fetches user-supplied URLs, consistent with
-RFC-0008. A caller that wants to inspect or adjust the imported
-metadata before registering can fetch the card itself and pass it
-via `a2a_card=` instead. A version registered this way, with no
-source and no configuration snapshot, is an interface-only record
-(see the register journey).
+`name` is a display string, not an identity. Fetches happen in the
+client, never in the registry server, consistent with RFC-0008; a
+caller can also fetch the card itself and pass it via `a2a_card=`
+to inspect the imported metadata first. A version registered this
+way, with no source and no configuration snapshot, is an
+interface-only record (see the register journey).
 
 ## Register a harness-based agent
 
@@ -264,14 +253,13 @@ mlflow.genai.register_agent(
 )
 ```
 
-There is no user source repository: the agent is the harness plus its
-configuration, so the configuration snapshot serves as the
+There is no user source repository: the agent is the harness plus
+its configuration, so the configuration snapshot serves as the
 definitional anchor. `config_snapshot` names a file or directory on
-the caller's local disk; the client reads it and uploads the content
-to MLflow artifact storage as an immutable artifact on the version.
-The registry server never fetches user-supplied locations itself,
-consistent with RFC-0008, which also means any redaction of secrets
-must happen client-side before upload.
+the caller's local disk; the client reads it and uploads the
+content to MLflow artifact storage as an immutable artifact on the
+version, which means any redaction of secrets must happen
+client-side before upload.
 
 ## Trace and evaluate against the agent
 
@@ -387,15 +375,11 @@ the record.
    descriptive and capability fields from the card (its free-form
    name seeds the mutable `display_name`; the registry `name` is
    supplied by the registrant) and creates an `a2a` access binding
-   for the endpoint. The card content is not persisted: the agent
-   detail page renders the card read-only by fetching it through
-   the binding, so the display never drifts from what the agent
-   serves. In the SDK and CLI, the client fetches the card at
-   import; in the UI, the browser fetches it when the endpoint
-   permits, or the user pastes it, since the registry server never
-   fetches user-supplied URLs (consistent with RFC-0008). The BOM
-   is supplied alongside, since the card schema does not carry
-   component version pins.
+   for the endpoint. In the SDK and CLI, the client fetches the
+   card at import; in the UI, the browser fetches it when the
+   endpoint permits, or the user pastes it, since the server never
+   fetches user-supplied URLs. The BOM is supplied alongside, since
+   the card schema does not carry component version pins.
 5. **CI path:** the same call runs from a pipeline, registering a new
    version on each release build with the source ref set to the
    build's commit.
@@ -421,51 +405,42 @@ the record.
    The configuration snapshot is read from the caller's local disk
    and stored as an immutable artifact on the version. It is what
    distinguishes this agent from every other installation of the
-   same harness: enabled tools, overridden defaults (for example, a
-   non-standard shell for the harness's shell tool), and behavioral
+   same harness: enabled tools, overridden defaults, and behavioral
    settings live there and nowhere else.
 
-   A harness's configuration surface is not always a single file:
-   Claude Code, for example, spreads behavioral configuration across
-   a settings file, instruction files, and subagent definitions.
-   `config_snapshot` therefore accepts a file or a directory. What it
-   should capture is the configuration the registry does not
-   otherwise represent; content that BOM references already govern,
-   such as installed skill directories or MCP server definitions,
-   should stay out of the snapshot, because an embedded copy is
-   invisible to cross-registry queries and can silently drift from
-   the declared references.
+   A harness's configuration surface is not always a single file
+   (Claude Code, for example, spreads it across a settings file,
+   instruction files, and subagent definitions), so
+   `config_snapshot` accepts a file or a directory. It should
+   capture only configuration the registry does not otherwise
+   represent: content that BOM references already govern, such as
+   installed skill directories or MCP server definitions, stays
+   out, because an embedded copy is invisible to cross-registry
+   queries and can drift from the declared references.
 
 Composition is required wherever it is knowable, because the BOM is
 the value: a registry record without composition is just a name in
 a list. A registrant anchoring on source or a configuration
-snapshot has the composition in front of them, so the requirement
-holds there. An interface-only registration (an A2A endpoint with
-no source or configuration snapshot) is different: the registrant
-of a vendor or partner agent cannot know which skills, servers, and
-models are inside a black box, and forcing a declaration would
-invite invented BOMs that pollute cross-registry queries. For
-interface-only records the BOM may therefore be empty or partial,
-an absent BOM is recorded as *undeclared* composition, not as an
-empty dependency list, and the record itself is marked as holding
-no definitional anchor: the registry knows the agent's claim
-surface, not its contents. Everything else is
-progressive enrichment. The endpoint URL is optional; the
-trace-and-eval journey below explains which agents need one. When
-provided, the URL becomes an access binding rather than a field on
-the immutable version.
+snapshot has the composition in front of them. The registrant of a
+black-box vendor or partner agent does not, and forcing a
+declaration would invite invented BOMs that pollute cross-registry
+queries; for interface-only records the BOM may therefore be empty
+or partial, an absent BOM is recorded as *undeclared* composition
+rather than an empty dependency list, and the record is marked as
+holding no definitional anchor: the registry knows the agent's
+claim surface, not its contents. Everything else is progressive
+enrichment. The endpoint is optional; the trace-and-eval journey
+below explains which agents need one.
 
 The harness path is the newest part of this design and the least
 settled (see [Open questions](#open-questions)). For framework-built
 and custom agents, the registered source is the natural complete
-record and remains the expected anchor. For harness-based agents,
-requiring
-source would force registrations that point at the harness vendor's
-repository, which identifies nothing about the specific agent, while
-the configuration that actually defines it went unrecorded.
-Configuration files frequently embed secrets and environment-specific
-values, so the snapshot mechanism needs redaction guidance at
-minimum.
+record and remains the expected anchor; for harness-based agents,
+requiring source would force registrations that point at the
+harness vendor's repository, which identifies nothing about the
+specific agent. Configuration files frequently embed secrets and
+environment-specific values, so the snapshot mechanism needs
+redaction guidance at minimum.
 
 ### Publish and maintain an agent's endpoint
 
@@ -500,17 +475,15 @@ disturbing the immutable version history.
    agent, its versions, and its history remain untouched.
 
 The protocol field is where agent bindings depart from RFC-0004,
-whose bindings are always MCP and vary only by transport. Agent
-endpoints speak different protocols, and the field is limited to
-values that tell a caller something actionable: `a2a` and `mcp` are
-self-describing (an Agent Card at the well-known path; the MCP
-handshake), so URL plus protocol is enough to connect. Labels like
-REST or gRPC name a transport without telling anyone how to call
-the agent, so they are deliberately collapsed into `other`, which
-records where an agent lives without claiming MLflow can invoke it.
-This keeps the registry open to custom protocols without pretending
-to understand them. As in RFC-0004, a binding that targets an alias
-such as `production` follows the alias as it moves between
+whose bindings are always MCP and vary only by transport. The field
+is limited to values that tell a caller something actionable: `a2a`
+and `mcp` are self-describing (an Agent Card at the well-known
+path; the MCP handshake), so URL plus protocol is enough to
+connect. Labels like REST or gRPC name a transport without telling
+anyone how to call the agent, so they are deliberately collapsed
+into `other`, which records where an agent lives without claiming
+MLflow can invoke it. As in RFC-0004, a binding that targets an
+alias such as `production` follows the alias as it moves between
 versions.
 
 ### Version an agent and compare bills of materials
@@ -573,9 +546,8 @@ organized by agent and version, not by experiment.
    `mlflow.genai.get_default_experiment_id("acme/billing-agent")`,
    where `get_default_experiment_id` is a public lookup that takes
    only the agent: the version is never part of the destination. (An
-   `MlflowAgentLocation` naming the agent can likewise be passed
-   anywhere MLflow accepts a trace destination, including
-   `start_span`'s existing `trace_destination` parameter.) Second,
+   `MlflowAgentLocation` naming the agent works anywhere MLflow
+   accepts a trace destination.) Second,
    it records the agent and version as trace-level metadata, the way
    session and user metadata are recorded today; this is what
    per-version filtering and comparison use. A deployment that
@@ -604,11 +576,10 @@ organized by agent and version, not by experiment.
    the cause, cross-referencing the BOM diff from the previous
    journey.
 
-Backward compatibility is preserved by construction: an agent owns a
-default experiment under the hood, and the agent location resolves
-to that experiment's ID. Where MLflow already accepts a typed
-destination or location (trace destinations, `search_traces`
-locations), agent identity becomes a new accepted value; where it
+Backward compatibility is preserved by construction. Where MLflow
+already accepts a typed destination or location (trace
+destinations, `search_traces` locations), agent identity becomes a
+new accepted value; where it
 does not (`evaluate`), `agent_id` is new, optional surface. Existing
 experiment-based workflows (including model training and
 fine-tuning) continue unchanged. The change is additive, not a data
@@ -626,10 +597,10 @@ other deployments of the same agent (a different owner or user
 base) overrides the destination in its own configuration; because
 permissions are experiment-scoped, separation is done with
 destinations, not trace tags. Versions share the agent's experiment
-for the same reason seen from the other side: a version is an
-analysis dimension recorded on every trace, not an access boundary,
-and per-version experiments would break the longitudinal view of an
-agent's behavior across upgrades. To keep such traces findable from the
+for the same reason: a version is an analysis dimension recorded on
+every trace, not an access boundary, and per-version experiments
+would break the longitudinal view of an agent's behavior across
+upgrades. So that overridden deployments stay findable from the
 agent's registry page, this RFC proposes that a deployment using a
 non-default experiment notify the registry, which records the
 experiment ID on that deployment's access binding. A deployment
@@ -640,9 +611,8 @@ belongs to the deferred registry synchronization glue.
 
 No endpoint is needed for any of this when the developer has the
 agent's code: the agent runs locally or in CI, autologging captures
-traces during execution, and evaluation scores outputs against a test
-dataset. This is why code-only registration supports the full
-trace-and-eval workflow. The exception is agents whose code the user
+traces during execution, and evaluation scores outputs against a
+test dataset. The exception is agents whose code the user
 cannot run: another team's A2A agent, a vendor agent, a partner
 service. For those, the endpoint is the only execution surface, and
 tracing and evaluation work by invoking the agent's access binding
@@ -684,8 +654,8 @@ auditable lifecycle state.
 This is the same core `draft` → `active` → `deprecated` lifecycle
 the MCP and Skill registries use (their soft-delete `deleted` state
 and transition rules carry over as well), applied to the agent
-itself. The
-auditable transition history is the accountability chain that problem
+itself. The auditable transition history is the accountability
+chain that problem
 1 identifies as missing: for any agent, the registry can say who
 promoted it, when, and what its evaluation evidence looked like at
 the time.
@@ -718,35 +688,25 @@ every affected agent without inspecting deployments one by one.
    versions with the skill removed or upgraded, and deprecate the
    affected versions (previous journey).
 
-The same query works for the other BOM axes: "which agents use MCP
-server Y whose tool schema changed?" and "which agents call model Z
-being retired?" Source entries are queryable the same way: "which
-agents ship OCI image X?" is the container-CVE variant of this
-journey. Agent plugin references expand through their
-members: RFC-0008 plugin versions immutably record which registered
-skills they contain, so "which agents use skill X" also finds
-agents that consume X through a plugin, rather than leaving a
-blind spot behind composed units. Because BOM entries are
-structured soft references,
-the query is a registry lookup with exact-match semantics rather than
-a scan of running infrastructure. Because a BOM holds many refs per
-axis, the name and version predicates must bind to the same BOM
-entry; matching a name on one skill ref and a version on another
-would produce false positives. That same-entry matching requirement
-is a store-level obligation for the detailed design, in the way
-exact matching on span attributes is for RFC-0009. The registry
-answers with consumers and owners; automated notification of those
-owners is deliberately not in the MVP (see Out of scope).
+The same query works for the other BOM axes ("which agents use MCP
+server Y whose tool schema changed?", "which agents call model Z
+being retired?") and for source entries: "which agents ship OCI
+image X?" is the container-CVE variant. Agent plugin references
+expand through their members: RFC-0008 plugin versions immutably
+record which registered skills they contain, so the query also
+finds agents that consume a skill through a plugin. The query has
+exact-match semantics, and the name and version predicates must
+bind to the same BOM entry (a store-level obligation for the
+detailed design, like exact span-attribute matching in RFC-0009).
+The registry answers with consumers and owners; automated
+notification of those owners is deliberately not in the MVP (see
+Out of scope).
 
-Coverage has two limits a reader of the results should keep in mind:
-the query sees only the component types the registry tracks, and
-within those, only what registrants declared. Agents with
-undeclared composition (black-box, interface-only registrations)
-can never match, so results should surface them alongside matches:
-"3
-agents declare the compromised skill; 12 more have undeclared
-composition." The query replaces infrastructure inspection for the
-governed axes; it does not claim completeness beyond them.
+Coverage has two limits: the query sees only the component types
+the registry tracks, and within those, only what registrants
+declared. Agents with undeclared composition can never match, so
+results should surface them alongside matches: "3 agents declare
+the compromised skill; 12 more have undeclared composition."
 
 ## Out of scope
 
@@ -773,8 +733,8 @@ rejection.
 - **Auto-discovery of composition.** BOMs are developer-asserted in
   the MVP. Inferring actual composition from traces (for example,
   from RFC-0009 `SKILL` spans) and notifying owners when assertion
-  and observation disagree is a compelling follow-on, and the span
-  data this RFC and RFC-0009 produce is designed to enable it.
+  and observation disagree is a follow-on that the span data from
+  this RFC and RFC-0009 is designed to enable.
 - **Detection of unregistered agents.** Surfacing "shadow" agents
   running without registry entries requires runtime scanning,
   which is platform work built on top of this registry.
@@ -904,8 +864,8 @@ TBD.
   skill pattern applied to agents would produce irreconcilable
   duplicate versions of what is really one agent. The list is
   currently an unordered set of asserted pointers. Reviewers who
-  weigh cross-registry consistency
-  heavily should push back here if the divergence is not worth it.
+  weigh cross-registry consistency heavily should push back here if
+  the divergence is not worth it.
 
 - **What is the BOM reference format?** The journeys sketch URI-style
   references (`skills:/billing-policy/1`,
@@ -915,9 +875,9 @@ TBD.
   scheme adopts the `mcp-servers:/` proposal from RFC-0010; the refs
   here respect RFC-0004's reverse-DNS server names and semantic
   versions. Bare identifiers cover external models (`gpt-4o`). BOM
-  references are soft (string-resolved, valid when
-  the target is unregistered), which URI syntax may misleadingly
-  suggest otherwise. Alternatives include structured
+  references are soft (string-resolved, valid when the target is
+  unregistered), which URI syntax may misleadingly suggest
+  otherwise. Alternatives include structured
   `{registry, name, version}` objects. Relatedly: should the BOM
   also be able to reference other agents, to represent multi-agent
   systems?
