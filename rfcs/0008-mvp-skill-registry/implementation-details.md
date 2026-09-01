@@ -485,7 +485,7 @@ only the fields relevant to that type:
 
 | Class | Fields | Description |
 |---|---|---|
-| `GitSource` | `url`, `ref`, `subpath` | Git repository. `url` is the clone URL. `ref` is the branch, tag, or commit (optional; defaults to the repository's default branch). `subpath` is the path within the repo (optional). |
+| `GitSource` | `url`, `ref`, `subpath` | Git repository. `url` is the clone URL, passed to git as given: any URL the caller's git can clone is valid, and a `.git` suffix is not required (the suffix matters only to the inference fallback, never to fetching). Provider web URLs (e.g., a GitHub `/tree/...` page) are not clone URLs; supply the clone URL and put the branch and directory in `ref` and `subpath`. `ref` is the branch, tag, or commit (optional; defaults to the repository's default branch). `subpath` is the path within the repo (optional). |
 | `OCISource` | `image`, `subpath` | OCI image. `image` is the image reference, optionally supplied with the `oci://` scheme (e.g., `oci://ghcr.io/acme/plugin:v1`). The scheme is a hint only, used to infer `source_type` when no explicit type accompanies the request and validated against it when one does: the persisted `source` is the bare reference (`ghcr.io/acme/plugin:v1`). `subpath` is the path within the image (optional). |
 | `ZipSource` | `url`, `subpath` | ZIP archive. `url` is the archive URL. `subpath` is the path within the archive (optional). |
 
