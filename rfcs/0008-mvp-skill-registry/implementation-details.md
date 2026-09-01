@@ -463,7 +463,7 @@ class SkillVersion:
 | `version` | `int` | Server-assigned monotonic integer. Each new version receives the next integer |
 | `organization` | `str` | Organization scope, from parent Skill |
 | `source` | `GitSource \| OCISource \| ZipSource \| str \| None` | Typed source descriptor for external content (git, OCI, zip); a plain `str` for `mlflow` content. For `source_type="mlflow"`, `source` is a server-set artifact path: for a standalone MLflow-stored skill it is the unique path where the server stored the uploaded content, and for a skill created by importing an MLflow-stored packaged plugin it is the package's artifact base path (a self-contained internal `mlflow-artifacts:` pointer captured at import time, with `subpath` locating the skill within that tree). A skill created by importing a packaged plugin more generally carries a source derived from the package: the package's `source_type` and `source` with a `subpath` locating the skill within the package. Because an imported member's pointer is stored on the skill version itself, its content resolves without reference to any membership row. The REST API represents this as flat `source_type`, `source`, `ref`, `subpath` fields; the SDK wraps and unwraps the typed classes (an `mlflow` `source` is a plain artifact-path string rather than a typed class) |
-| `source_type` | `SkillSourceType \| None` | Server-set discriminator (`git`, `oci`, `zip`, `mlflow`), populated on responses. Clients never supply it on create; the server infers it (see the field-inference rules below). Together with `source` it determines how content is stored and how `pull` routes |
+| `source_type` | `SkillSourceType \| None` | Server-set discriminator (`git`, `oci`, `zip`, `mlflow`), populated on responses. On create, a client that knows the type of an external pointer (CLI subcommand, SDK typed class) submits it and the server validates it against the source value; without an explicit type the server infers it (see the field-inference rules below). `mlflow` is flow-derived and never client-supplied. Together with `source` it determines how content is stored and how `pull` routes |
 | `digest` | `str \| None` | Content hash of the resolved skill content (the same notion as a dataset `digest`). Computed by the client during local inspection and submitted at registration and import; client-asserted and not server-verified. It identifies a version by content within a skill name. Stored, returned on get, and indexed so callers can group versions by content (clean diffs between agent plugin versions, and traces before and after a change linking to the same content); it does not drive import, which always creates a new member version (see Content digest) |
 | `status` | `SkillStatus` | Per-version lifecycle: `draft`, `active`, `deprecated`, `deleted` |
 | `aliases` | `list[str]` | Alias names currently pointing at this version (read-only, projected from alias table) |
@@ -486,7 +486,7 @@ only the fields relevant to that type:
 | Class | Fields | Description |
 |---|---|---|
 | `GitSource` | `url`, `ref`, `subpath` | Git repository. `url` is the clone URL. `ref` is the branch, tag, or commit (optional; defaults to the repository's default branch). `subpath` is the path within the repo (optional). |
-| `OCISource` | `image`, `subpath` | OCI image. `image` is the image reference, supplied with the `oci://` scheme (e.g., `oci://ghcr.io/acme/plugin:v1`) so the server can infer `source_type`. The scheme is an inference hint only: the persisted `source` is the bare reference (`ghcr.io/acme/plugin:v1`). `subpath` is the path within the image (optional). |
+| `OCISource` | `image`, `subpath` | OCI image. `image` is the image reference, optionally supplied with the `oci://` scheme (e.g., `oci://ghcr.io/acme/plugin:v1`). The scheme is a hint only, used to infer `source_type` when no explicit type accompanies the request and validated against it when one does: the persisted `source` is the bare reference (`ghcr.io/acme/plugin:v1`). `subpath` is the path within the image (optional). |
 | `ZipSource` | `url`, `subpath` | ZIP archive. `url` is the archive URL. `subpath` is the path within the archive (optional). |
 
 MLflow artifact storage does not use a source class; its `source` is a plain
@@ -498,9 +498,13 @@ it.
 
 The REST API represents these as flat fields (`source_type`,
 `source`, `ref`, `subpath`); the SDK converts between typed classes
-and flat fields. The server determines `source_type` from the source
-value for external pointers and from the creation flow for content it
-stores itself (the upload flow; see the field-inference rules below),
+and flat fields, and the conversion carries the class's type through as
+the request's `source_type` (`GitSource` submits `source_type="git"`,
+and so on), so the explicit choice the caller already made is not
+discarded in the flat representation. The server validates a submitted
+`source_type` against the source value, infers the type when none is
+submitted, sets it from the creation flow for content it stores itself
+(the upload flow; see the field-inference rules below),
 and returns it in responses. The SDK surfaces `source_type` as a field on
 the version and uses it to reconstruct the typed class for external
 sources; for `mlflow` content the `source` is a plain artifact-path string,
@@ -926,11 +930,13 @@ transition the version to `deleted`.
 
 Version-creation methods (`create_skill_version`,
 `create_agent_plugin_version`) receive the server-resolved `source_type`
-as a flat field. The server infers it per the field-inference rules
-before calling the store, and the store persists it without re-inferring.
-At this layer `source_type` is server-internal, not a user-facing input;
-the client-facing `MlflowClient` and `mlflow.genai` methods take only
-`source`.
+as a flat field. The server resolves it per the field-inference rules
+(validating a submitted type, inferring when none is submitted) before
+calling the store, and the store persists it without re-deriving.
+At this layer `source_type` is the resolved value, not a raw client
+claim; the client-facing `MlflowClient` and `mlflow.genai` methods take
+only `source`, whose typed class carries the explicit type when there is
+one.
 
 ```python
 from mlflow.store.tracking import SEARCH_MAX_RESULTS_DEFAULT
@@ -1338,12 +1344,14 @@ def register_skill(
     content digest from SKILL.md and the files under subpath during
     that same inspection and submits it whether or not name was
     supplied. The server
-    sets source_type from the source value (git, oci, or zip for
-    external pointers) or from the creation flow (mlflow when the
-    client uploads a local path). A typed source class
-    (GitSource, OCISource, ZipSource) is converted to flat REST
-    fields; a plain string is also accepted for convenience and
-    passed as the source field with type inferred by the server.
+    resolves source_type: a typed source class (GitSource, OCISource,
+    ZipSource) is converted to flat REST fields including an explicit
+    source_type, which the server validates against the source value;
+    a plain string is also accepted for convenience and passed as the
+    source field with type inferred by the server, and a plain string
+    whose type cannot be inferred is rejected with an error directing
+    the caller to a typed source class. The creation flow sets mlflow
+    when the client uploads a local path.
     If source is a local path (no :// scheme), the client submits the
     packaged content with the registration request and the server stores
     it and creates the version in one atomic operation (no separate
@@ -1710,11 +1718,24 @@ client from the resolved content during the same inspection and submitted (see
 Content digest); the server stores the client-asserted value and does not
 recompute or verify it, for uploaded content or external pointers alike.
 
-The server sets `source_type`; it is not a user-facing parameter and needs no
-access to the content. For
-external pointers it is inferred from the `source` value: `.git` suffix
-or `git://` scheme = git, `oci://` scheme = oci, `.zip` = zip. The
-`oci://` scheme is an inference hint only: the server records
+The server sets the stored `source_type`, and setting it needs no access to
+the content. For external pointers the request may carry an explicit
+`source_type` (`git`, `oci`, or `zip`): the CLI's `register
+git`/`oci`/`zip` subcommands and the SDK's typed source classes always
+know the type and submit it, so information the caller has already
+expressed is not discarded and then guessed at. The server validates an
+explicit type against the source value and rejects a contradiction with
+an unambiguous scheme (`source_type="git"` with an `oci://` source, for
+example). When no explicit type is submitted (a plain-string source, or
+a raw REST caller), the server infers it from the `source` value: `.git`
+suffix or `git://` scheme = git, `oci://` scheme = oci, `.zip` = zip.
+An external pointer that matches none of these and carries no explicit
+type is rejected with an error directing the caller to supply
+`source_type` (or use a typed source class or CLI subcommand), rather
+than misclassified; this matters because common source URLs carry no
+distinguishing shape (an HTTPS Git clone URL without the `.git` suffix,
+an archive URL without a `.zip` path ending). The
+`oci://` scheme is a hint only: the server records
 `source_type="oci"` and persists the bare image reference without the
 scheme, so `pull` and `introspect` operate on the native OCI reference.
 For content
@@ -1735,8 +1756,12 @@ through the ordinary creation APIs from member references with no plugin-level
 package becomes `assembled`. Because an ordinary agent plugin request
 that carries no plugin-level package is `assembled` by definition, a null-`source`
 request to the ordinary creation APIs is unambiguous (a skill version is
-`mlflow`, an agent plugin version is `assembled`). Keeping
-`source_type` server-set keeps that discriminator consistent across languages,
+`mlflow`, an agent plugin version is `assembled`). The `mlflow` and
+`assembled` types are therefore never client-supplied: an explicit
+`source_type` naming either of them is rejected, since those types are
+fixed by the creation flow rather than declared. Keeping the stored
+`source_type` server-set (validated when submitted, inferred otherwise)
+keeps that discriminator consistent across languages,
 and it needs no content, so it does not require the server to fetch anything.
 Content-derived fields are produced client-side instead, so the server never
 fetches user-supplied URLs; checks that operate on bytes uploaded directly to
@@ -1984,6 +2009,7 @@ class CreateSkillVersionRequest(BaseModel):
     # version's `source` to the artifact path where it wrote the content.
     name: str | None = None  # structurally nullable only because this model is shared with POST /@{organization}/{name}/versions (where name comes from the parent path and any body name is ignored); POST /register validates it as required (the SDK/CLI fills it from SKILL.md during local inspection, so a raw REST caller that omits it is rejected)
     organization: str = ""  # for POST /register only; ignored for versioned paths
+    source_type: str | None = None  # optional explicit type for an external source (git/oci/zip only; mlflow is flow-derived and rejected here); validated against `source`, with inference as the fallback when omitted (see Field inference)
     source: str | None = None
     ref: str | None = None
     subpath: str | None = None
@@ -2024,6 +2050,7 @@ class CreateAgentPluginVersionRequest(BaseModel):
     version: str | None = None
     plugin_json: PluginJSONPayload | None = None
     skills: list[str] | None = None
+    source_type: str | None = None  # optional explicit type for an external package source (git/oci/zip only; mlflow and assembled are flow-derived and rejected here); validated against `source`, with inference as the fallback when omitted (see Field inference)
     source: str | None = None
     ref: str | None = None
     subpath: str | None = None
@@ -2051,13 +2078,14 @@ class MemberSkillDefinition(BaseModel):
 class ImportRegisterRequest(BaseModel):
     # Submitted after the client fetches and inspects the source locally. The
     # server creates the member skills and the packaged plugin version in one
-    # transaction; source_type is server-set and each member skill's source is
-    # derived from the package (its source_type and source, plus the member's
-    # subpath).
+    # transaction; the stored source_type is server-set and each member skill's
+    # source is derived from the package (its source_type and source, plus the
+    # member's subpath).
     plugin_json: PluginJSONPayload
     version: str | None = None  # required when plugin_json omits a version
     organization: str = ""
     member_skills: list[MemberSkillDefinition] = Field(default_factory=list)  # discovered members with metadata
+    source_type: str | None = None  # optional explicit type for the external package pointer (git/oci/zip only); the import client fetched the source, so it always knows the type and submits it; validated against `source`, with inference as the fallback (see Field inference)
     source: str | None = None  # external package pointer; null for an MLflow-stored package
     ref: str | None = None
     subpath: str | None = None
@@ -2286,6 +2314,12 @@ flag also accepted; for example, `mlflow skills get skills:/code-review` and
 | `mlflow agent-plugins introspect` | `introspect_agent_plugin()` | Preview a local or remote plugin without registry writes |
 | `mlflow agent-plugins import` | `import_agent_plugin()` | Import a plugin as a packaged agent plugin |
 | `mlflow agent-plugins pull` | `pull()` | Pull content to local filesystem |
+
+The `register git`/`oci`/`zip` subcommands name the source type
+explicitly, and the CLI submits it as the request's `source_type` (just
+as the SDK's typed source classes do), so registration through these
+surfaces never depends on the server inferring the type from the URL's
+shape.
 
 `create-version` and `register` accept `--plugin-json PATH` for a full standard
 manifest. When omitted for an assembled plugin, `--version` is required and

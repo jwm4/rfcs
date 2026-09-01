@@ -65,9 +65,15 @@ The two entity types are:
 
 **Minimize required inputs.** The CLI and SDK infer optional fields
 from source content when possible, so the simplest invocation requires
-only what cannot be derived. `source_type` is set by the server (from the
-source value for external pointers, and from the creation flow otherwise),
-which needs no access to the content. Content-derived fields are read from the
+only what cannot be derived. `source_type` is set by the server, which
+needs no access to the content: a client that already knows the type
+(the CLI's `register git`/`oci`/`zip` subcommands, the SDK's typed
+source classes) submits it explicitly and the server validates it
+against the source value, while a request without an explicit type
+falls back to inference (from the source value for external pointers,
+and from the creation flow otherwise). The stored discriminator is
+server-set either way; `mlflow` content is always flow-derived and
+never client-declared. Content-derived fields are read from the
 skill's SKILL.md and computed by the client during local inspection and
 submitted with the request: a skill's `name` and content `digest` always, and a
 package member's `description` and `keywords` as well. The registry server never fetches a user-supplied source URL; this
