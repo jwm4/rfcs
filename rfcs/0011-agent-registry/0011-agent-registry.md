@@ -586,9 +586,12 @@ The same query works for the other BOM axes ("which agents use MCP
 server Y whose tool schema changed?", "which agents call model Z
 being retired?") and for source entries: "which agents ship OCI
 image X?" is the container-CVE variant. Agent plugin references
-expand through their members: RFC-0008 plugin versions immutably
-record which registered skills they contain, so the query also
-finds agents that consume a skill through a plugin. The query has
+expand through their members: plugin versions immutably record
+which registered skills they contain, so the query also finds
+agents that consume a skill through a plugin. Expansion covers the
+member types plugin versions record: skill members today, with more
+member types (MCP servers, subagents) extending the expansion as
+the extended agent plugins proposal lands. The query has
 exact-match semantics, and the name and version predicates must
 bind to the same BOM entry (a store-level obligation for the
 detailed design, like exact span-attribute matching in RFC-0009).
