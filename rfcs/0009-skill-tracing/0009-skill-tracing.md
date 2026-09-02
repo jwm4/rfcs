@@ -47,7 +47,10 @@ activation is identifiable as a specific span, that span is also
 annotated with the skill's registry coordinates: workspace,
 organization, name, and version, plus the version's content digest
 when the instrumentation has it. Tool calls that use a skill's
-bundled files are annotated the same way.
+bundled files are annotated the same way. Each link records how it
+was produced (explicit instrumentation, in-process resolution, or
+install-record matching), so consumers of the linkage can weigh the
+evidence behind it.
 
 Two terms recur below. A **harness** is a packaged agent application
 that skills are installed into and that runs them without code written
@@ -266,7 +269,10 @@ install, has nothing recorded for it and produces no link.
 Nothing about the run fails in that case: the agent runs normally,
 other autologging is unaffected, and the developer can still link
 explicitly. The same is true of a missing or unreadable install
-record.
+record. Before linking, the autologger also validates the installed
+content against the digest recorded at install time; on a mismatch
+it logs an error and records no link, and the validation result is
+cached locally so content is not re-hashed on every run.
 
 This journey applies in full to harnesses whose tracing integration
 is provided by MLflow. Some harnesses instead trace themselves
@@ -482,15 +488,6 @@ TBD.
   was actually installed. Should this RFC include full installation,
   only the tracing-activation command, or the activation command now
   with installation as follow-on work?
-- **Locally modified installs.** Installation verifies pulled
-  content against the registered digest, so a version that drifted at
-  its source fails to install (RFC-0008's pull verification). After
-  installation, however, the content inside the harness can be edited
-  or replaced, and the install record then attributes runs to a
-  version that no longer describes what ran. Should the autologger
-  validate installed content against the recorded digest before
-  linking, record the link with a noted mismatch, or accept the drift
-  as outside tracing's scope?
 - **Digest-based linking.** Digest queries resolve through the
   registry: RFC-0008 indexes a skill's versions by content digest, so
   grouping traces by content is a registry lookup followed by a trace
