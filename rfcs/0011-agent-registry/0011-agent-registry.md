@@ -47,7 +47,8 @@ In brief, the design takes these positions, each stated in full in
 [Design positions](#design-positions): the registry is
 record-level, not runtime-aware; an agent's versions are immutable
 snapshots of its composition (a bill of materials of skills, agent
-plugins, MCP servers, and models) plus at least one definitional
+plugins, MCP servers, models, and other agents it calls) plus at
+least one definitional
 anchor (source pointers and/or a configuration snapshot); A2A Agent
 Cards are fetched from the agent's endpoint, never stored;
 endpoints are mutable, protocol-typed access bindings rather than
@@ -94,6 +95,7 @@ mlflow.genai.register_agent(
     ],
     skills=["skills:/billing-policy/1", "skills:/refund-rules/2"],
     agent_plugins=["agent-plugins:/billing-workflow/1.2.0"],
+    agents=["agents:/acme/records-agent/2"],
     mcp_servers=["mcp-servers:/acme.internal/payments-db/2.0.0"],
     models=["models:/acme-billing-llm/3", "gpt-4o"],
 )
@@ -525,6 +527,17 @@ component-level attribution within agent-level organization: from an
 agent's trace list, the `SKILL` spans inside a trace show which BOM
 entries were actually exercised.
 
+Calls to other agents follow the same idea. Every call to another
+agent is annotated at the call site with the callee's identity, so
+the callee's registry page can find traces it participated in.
+Where the callee's own work lands follows from where it runs: an
+in-process callee (an agent used as a tool inside the caller's
+process) nests as spans in the caller's trace, like nested skills;
+a remote callee (delegation over A2A to a separately running agent)
+produces its own trace in its own destination, linked to the
+caller's trace through propagated trace context, using the span
+links MLflow already supports for OpenTelemetry.
+
 ### Manage an agent's lifecycle
 
 An agent owner or platform team needs agents to carry an explicit,
@@ -585,7 +598,9 @@ every affected agent without inspecting deployments one by one.
 The same query works for the other BOM axes ("which agents use MCP
 server Y whose tool schema changed?", "which agents call model Z
 being retired?") and for source entries: "which agents ship OCI
-image X?" is the container-CVE variant. Agent plugin references
+image X?" is the container-CVE variant. Agent references close the
+highest-impact case: "which agents call the compromised agent?" is
+a query over the same axis. Agent plugin references
 expand through their members: plugin versions immutably record
 which registered skills they contain, so the query also finds
 agents that consume a skill through a plugin. Expansion covers the
@@ -677,7 +692,11 @@ SDK namespace, following the pattern of RFC-0004 and RFC-0008:
   references (a plugin is referenced as a composed unit and expands
   through its registered members for queries), MCP server
   references, model references (registry models or external model
-  identifiers such as `gpt-4o`), and, for agents that run as
+  identifiers such as `gpt-4o`), references to other agents it calls
+  (pinned to a version when the referencing team controls the
+  callee's deployment, as with a set of agents versioned and
+  deployed together as one application, and name-level when the
+  callee is independently managed), and, for agents that run as
   configurations of a packaged harness, a harness reference (a
   proposed axis; see [Open questions](#open-questions)). Each
   version also carries at least one **definitional anchor**: source
@@ -899,6 +918,4 @@ TBD.
   references are soft (string-resolved, valid when the target is
   unregistered), which URI syntax may misleadingly suggest
   otherwise. Alternatives include structured
-  `{registry, name, version}` objects. Relatedly: should the BOM
-  also be able to reference other agents, to represent multi-agent
-  systems?
+  `{registry, name, version}` objects.
