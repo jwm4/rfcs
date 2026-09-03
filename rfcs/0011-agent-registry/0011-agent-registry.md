@@ -48,8 +48,8 @@ In brief, the design takes these positions, each stated in full in
 record-level, not runtime-aware; an agent's versions are immutable
 snapshots of its composition (a bill of materials of skills, agent
 plugins, MCP servers, models, and other agents it calls) plus at
-least one definitional
-anchor (source pointers and/or a configuration snapshot); A2A Agent
+least one definitional anchor (typed source pointers, which for a
+harness-based agent point at its configuration); A2A Agent
 Cards are fetched from the agent's endpoint, never stored;
 endpoints are mutable, protocol-typed access bindings rather than
 version fields; and an agent is a trace destination with one
@@ -131,7 +131,7 @@ registry `name` is always chosen by the registrant, since a card's
 client, never in the registry server, consistent with RFC-0008; a
 caller can also fetch the card itself and pass it via `a2a_card=`
 to inspect the imported metadata first. A version registered this
-way, with no source and no configuration snapshot, is an
+way, with no source, is an
 interface-only record (see the register journey).
 
 ## Register a harness-based agent
@@ -145,17 +145,22 @@ mlflow.genai.register_agent(
     skills=["skills:/runbook-triage/2"],
     mcp_servers=["mcp-servers:/acme.internal/pagerduty/1.2.0"],
     models=["claude-sonnet-5"],
-    config_snapshot="./opencode.json",
+    sources=[GitSource(
+        url="https://github.com/acme/oncall-config.git",
+        ref="c41d9e0",
+    )],
 )
 ```
 
-There is no user source repository: the agent is the harness plus
-its configuration, so the configuration snapshot serves as the
-definitional anchor. `config_snapshot` names a file or directory on
-the caller's local disk; the client reads it and uploads the
-content to MLflow artifact storage as an immutable artifact on the
-version, which means any redaction of secrets must happen
-client-side before upload.
+There is no agent code of the user's own: the agent is the harness
+plus its configuration, so the source pointer points at the
+configuration and serves as the definitional anchor. Any of the
+Skill Registry's source types works: a Git repo, an OCI image, a
+zip archive, or direct MLflow artifact storage (`mlflow`), the last
+only in deployments where MLflow serves artifacts. Configuration
+files often embed secrets, so the `mlflow` type carries the same
+caveat it does for skill content: what is uploaded is what is
+stored.
 
 ## Trace and evaluate against the agent
 
@@ -249,7 +254,7 @@ the record.
    )
    ```
    Required: name, description, and at least one of: a definitional
-   anchor (source provenance or a configuration snapshot) or an A2A
+   anchor (one or more typed source pointers) or an A2A
    endpoint. These combine freely; a first-party A2A agent registers
    with both source and endpoint. Only a registration with an
    endpoint and no anchor produces an interface-only record (see
@@ -282,10 +287,10 @@ the record.
 6. **Harness path:** an agent that runs as a configuration of a
    packaged harness (Claude Code, OpenCode, Goose, and similar; see
    [RFC-0009](https://github.com/mlflow/rfcs/pull/37) for the
-   harness/framework distinction) typically has no source repository
-   of its own: the agent *is* the harness plus its configuration. It
-   registers with a harness reference in place of user source, and
-   attaches the configuration that defines it:
+   harness/framework distinction) has no agent code of its own: the
+   agent *is* the harness plus its configuration. It registers with
+   a harness reference and a source pointer to the configuration
+   that defines it:
    ```python
    mlflow.genai.register_agent(
        name="acme/oncall-helper",
@@ -295,29 +300,35 @@ the record.
        skills=["skills:/runbook-triage/2"],
        mcp_servers=["mcp-servers:/acme.internal/pagerduty/1.2.0"],
        models=["claude-sonnet-5"],
-       config_snapshot="./opencode.json",
+       sources=[GitSource(
+           url="https://github.com/acme/oncall-config.git",
+           ref="c41d9e0",
+       )],
    )
    ```
-   The configuration snapshot is read from the caller's local disk
-   and stored as an immutable artifact on the version. It is what
-   distinguishes this agent from every other installation of the
-   same harness: enabled tools, overridden defaults, and behavioral
-   settings live there and nowhere else.
+   The configuration is what distinguishes this agent from every
+   other installation of the same harness: enabled tools, overridden
+   defaults, and behavioral settings live there and nowhere else. It
+   is referenced, not stored. Any of the Skill Registry's source
+   types serves (Git, OCI, zip, or direct MLflow artifact storage
+   where the deployment serves artifacts), so the registry treats
+   configuration the way it treats skill content, pointing at where
+   it belongs rather than becoming its home.
 
    A harness's configuration surface is not always a single file
    (Claude Code, for example, spreads it across a settings file,
-   instruction files, and subagent definitions), so
-   `config_snapshot` accepts a file or a directory. It should
-   capture only configuration the registry does not otherwise
-   represent: content that BOM references already govern, such as
-   installed skill directories or MCP server definitions, stays
-   out, because an embedded copy is invisible to cross-registry
-   queries and can drift from the declared references.
+   instruction files, and subagent definitions), which every source
+   type accommodates as a tree. The configuration source should hold
+   only configuration the registry does not otherwise represent:
+   content that BOM references already govern, such as installed
+   skill directories or MCP server definitions, stays out, because
+   an embedded copy is invisible to cross-registry queries and can
+   drift from the declared references.
 
 Composition is required wherever it is knowable, because the BOM is
 the value: a registry record without composition is just a name in
-a list. A registrant anchoring on source or a configuration
-snapshot has the composition in front of them. The registrant of a
+a list. A registrant anchoring on a source has the composition in
+front of them. The registrant of a
 black-box vendor or partner agent does not, and forcing a
 declaration would invite invented BOMs that pollute cross-registry
 queries; for interface-only records the BOM may therefore be empty
@@ -335,8 +346,9 @@ record and remains the expected anchor; for harness-based agents,
 requiring source would force registrations that point at the
 harness vendor's repository, which identifies nothing about the
 specific agent. Configuration files frequently embed secrets and
-environment-specific values, so the snapshot mechanism needs
-redaction guidance at minimum.
+environment-specific values; pointing at configuration rather than
+storing it keeps that custody outside MLflow, and the `mlflow`
+source type carries the same caveat it does for skills.
 
 ### Publish and maintain an agent's endpoint
 
@@ -398,9 +410,8 @@ versions to see exactly what differs.
    on the Versions tab, and choose Compare.
 4. The comparison shows a side-by-side BOM diff: for example,
    `billing-policy` skill `1` → `2`, model `llama-3.1-70b` →
-   `llama-3.1-405b`, one MCP server added. When both versions carry
-   configuration snapshots, those diff as content: for example, v4
-   switched the harness's shell configuration.
+   `llama-3.1-405b`, one MCP server added, or the configuration
+   source moved from one ref to another.
 5. Changed components link to their Skill Registry and MCP Server
    Registry entries, where their own version histories and changelogs
    live.
@@ -700,9 +711,11 @@ SDK namespace, following the pattern of RFC-0004 and RFC-0008:
   configurations of a packaged harness, a harness reference (a
   proposed axis; see [Open questions](#open-questions)). Each
   version also carries at least one **definitional anchor**: source
-  provenance (one or more typed source pointers as in RFC-0008: a
-  Git repo and ref, an OCI image, an archive) and/or an immutable
-  configuration snapshot. An agent registered from an A2A endpoint
+  provenance, as one or more typed source pointers of the kinds the
+  Skill Registry supports (a Git repo and ref, an OCI image, a zip
+  archive, or direct MLflow artifact storage), which for a
+  harness-based agent point at its configuration. An agent
+  registered from an A2A endpoint
   alone is an interface-only record with no anchor (see below).
   Each change to composition is a new version.
 
@@ -740,8 +753,8 @@ conventions exist, so it is bounded by MLflow's governance surface
 rather than by agent anatomy: an agent's prompt strategy or memory
 configuration has no axis because nothing governs one. Three layers
 share the job of describing an agent. Structured BOM references are
-selective but queryable across agents. Definitional anchors (a source
-pointer, a configuration snapshot) are complete but opaque: they
+selective but queryable across agents. Definitional anchors (source
+pointers) are complete but opaque: they
 capture everything about one agent without supporting cross-agent
 queries. Free-form tags are the catch-all for facts that fit
 neither. New structured axes are expected as the governance surface
@@ -762,7 +775,7 @@ deliberately departs from the canonical-payload pattern of RFC-0004
 (`server_json`) and RFC-0008 (`plugin.json`): MLflow is the system
 of record for those payloads, while an Agent Card's system of
 record is the agent itself. An agent registered from an endpoint
-alone, with no source and no configuration snapshot, is an
+alone, with no source, is an
 **interface-only record**: the registry captures the claim surface
 (identity, imported metadata, endpoint) and marks that it holds no
 definitional anchor.
@@ -862,17 +875,13 @@ TBD.
 - **How should harness-based agents be described?** Agents that run
   as configurations of a packaged harness (Claude Code, OpenCode,
   Goose) have no user source repository; the agent is the harness
-  plus its configuration. This RFC proposes three mechanisms for
-  them, going beyond the source-centric design the journeys otherwise
+  plus its configuration. This RFC proposes two mechanisms for them,
+  going beyond the code-centric design the journeys otherwise
   follow: a harness reference axis in the BOM (an external
-  identifier, like external model references), an immutable
-  configuration snapshot stored as a version artifact to serve as the
-  definitional anchor, and a relaxation of the required fields from
-  "source" to "at least one definitional anchor" (source,
-  configuration snapshot, or A2A card). Sub-questions:
+  identifier, like external model references), and treating the
+  configuration as the version's source, pointed at through the same
+  typed source pointers used for skill content. Sub-questions:
 
-  - Do configuration snapshots invite secret leakage badly enough to
-    need enforced redaction rather than guidance?
   - Should a harness axis wait for some notion of harness identity
     governance?
   - What are the identifier semantics of a harness reference? The
@@ -886,12 +895,10 @@ TBD.
     harnesses are distributed.
   - Should the set of files that constitutes a harness's
     configuration surface be defined by per-harness integrations
-    (the harness integrations contemplated by RFC-0009 would be a
-    natural home) rather than hand-picked by each registrant, given
-    that the surface must also exclude content the BOM already
-    governs?
-  - Does configuration-as-artifact belong in this RFC or a
-    follow-on?
+    (the harness integrations contemplated by the skill tracing
+    proposal would be a natural home) rather than assembled by each
+    registrant, given that the surface must also exclude content the
+    BOM already governs?
 
 - **Should a version record multiple sources?** This RFC says yes: a
   version's source provenance is a list of typed pointers, so an
