@@ -48,9 +48,9 @@ annotated with the skill's registry coordinates: workspace,
 organization, name, and version, plus the version's content digest
 when the instrumentation has it. Tool calls that use a skill's
 bundled files are annotated the same way. Each link records how it
-was produced (explicit instrumentation, in-process resolution, or
-install-record matching), so consumers of the linkage can weigh the
-evidence behind it.
+was produced (explicit instrumentation, in-process resolution,
+install-record matching, or content-marker inference), so consumers
+of the linkage can weigh the evidence behind it.
 
 Two terms recur below. A **harness** is a packaged agent application
 that skills are installed into and that runs them without code written
@@ -278,11 +278,20 @@ This journey applies in full to harnesses whose tracing integration
 is provided by MLflow. Some harnesses instead trace themselves
 through native OpenTelemetry export, with MLflow as the receiver. The
 receiving server cannot read an install record on the harness's
-machine, so linkage on this path requires the emitted spans to carry
-the skill coordinates themselves (the attribute contract shown in the
-first journey, set by instrumentation on the host that can read the
-record) or a server-side mapping defined in the detailed design.
-MLflow does not create additional spans on the harness's behalf.
+machine, so linkage on this path requires the coordinates to reach
+the server inside the spans themselves. Two routes do that. The
+first is the attribute contract shown in the first journey, set by
+instrumentation on the host that can read the record. The second is
+a best-effort fallback: installation appends a machine-readable
+marker carrying the coordinates to the skill body, and the server
+recognizes the marker inside captured LLM input at ingestion,
+creating the link only when the marker's coordinates resolve in the
+registry and its digest matches the version's. Marker-derived links
+carry the content-marker provenance, and the route works only when
+the harness captures LLM content in its spans, which several
+harnesses leave off by default. Digest validation excludes the
+marker line from hashing. MLflow does not create additional spans on
+the harness's behalf.
 
 #### Measure adoption of a registered skill
 
