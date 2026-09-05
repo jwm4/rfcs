@@ -158,29 +158,40 @@ workflows the resulting links support.
 A developer building an agent directly on the MLflow SDK wants the
 traces it produces to record which registered skill was active.
 
-1. Record the link where the skill is activated:
+1. Record the link on the span where the skill is activated:
    ```python
    import mlflow
 
-   mlflow.genai.link_skill(name="code-review", version=1)
+   with mlflow.start_span("review") as span:
+       span.link_skill(name="code-review", version=1)
+       ...
    ```
-   Called inside an active trace, this links the trace to the skill
-   version and annotates the current span as the activation point.
-   Like the rest of the registry surface, it also accepts an alias:
+   The method is on the span object, so the target is explicit: it
+   annotates that span as the activation point and links the span's
+   trace to the skill version. Code without a span in hand uses
+   `mlflow.get_current_active_span()`. Like the rest of the registry
+   surface, the method also accepts an alias:
    ```python
-   mlflow.genai.link_skill(name="code-review", alias="production")
+   span.link_skill(name="code-review", alias="production")
    ```
    The alias is resolved when the link is recorded and the trace
    stores the concrete version, consistent with RFC-0008's rule that
    aliases are accepted as input but never stored in place of
    versions. Aliases move; a trace that stored `@production` would
-   become ambiguous the moment the alias was repointed. The call also
-   accepts an `organization`; the examples here omit it and use the
-   empty default organization, as RFC-0008's examples do.
+   become ambiguous the moment the alias was repointed. Alias
+   resolutions are cached per process with a short expiry, following
+   the prompt registry's alias cache, so repeated links in a hot path
+   do not query the registry on every call; a caller can shorten or
+   disable the cache per call. Pinned versions need no resolution.
+   The method also accepts an `organization`; the examples here omit
+   it and use the empty default organization, as RFC-0008's examples
+   do.
 
-   **OpenTelemetry equivalent:** a caller instrumenting with plain
-   OTel sets the same attributes on the span where activation
-   happens, and MLflow records the link from them:
+   **Without the MLflow SDK:** a caller instrumenting with plain
+   OpenTelemetry has no `link_skill` method and instead sets these
+   attributes on the activation span. MLflow recognizes the
+   `mlflow.skill.*` attributes as a skill activation when it receives
+   the span and records the link from them:
    ```python
    span.set_attribute("mlflow.skill.name", "code-review")
    span.set_attribute("mlflow.skill.version", 1)
@@ -240,9 +251,11 @@ resolution step.
    MLflow resolves the alias to a concrete version, delegates the
    harness-specific install to the configured package manager plugin,
    and records the resulting harness-local skill name and location
-   against the registry coordinates that were installed. Recording
-   this at install time is what makes the linkage survive a package
-   manager that renames or prefixes the skill. Project-scoped
+   against the registry coordinates that were installed. The record
+   maps each installed skill's harness-local name and location to its
+   workspace, organization, name, version, and content digest.
+   Recording this at install time is what makes the linkage survive a
+   package manager that renames or prefixes the skill. Project-scoped
    installs record this in the project, and user-scoped installs
    record it in the user's MLflow configuration. When both define the
    same harness-local skill name, the project entry wins.
@@ -313,10 +326,16 @@ versions are in play.
    page shows linked skills on each row.
 
 The filter follows the precedent of the existing `prompt` filter for
-prompt-to-trace links: an exact-match query over the trace's linked
-entities. A skill in a named organization is qualified as in the
-registry's URI form, `skill = '@acme/code-review/1'`. The name-only
-and organization-qualified forms are extensions this RFC proposes;
+prompt-to-trace links, and so does the storage behind it: a skill link
+is a lineage record associating the trace with the skill version,
+the same mechanism prompt links use, and the filter is an exact-match
+query over those records. Span attributes mark where activation
+happened but are not the query path. Links created at ingestion from
+attributes or content markers produce the same lineage record, so
+every provenance is reached by the one query. A skill in a named
+organization is qualified as in the registry's URI form,
+`skill = '@acme/code-review/1'`. The name-only and
+organization-qualified forms are extensions this RFC proposes;
 the prompt filter accepts only the `name/version` form. Exact
 matching matters here; substring matching over trace
 content would match `code-review` inside `code-review-strict` and
