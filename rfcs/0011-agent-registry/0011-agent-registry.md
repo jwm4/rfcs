@@ -505,7 +505,12 @@ arrangement. A deployment that needs its traces kept separate from
 other deployments of the same agent (a different owner or user
 base) overrides the destination in its own configuration; because
 permissions are experiment-scoped, separation is done with
-destinations, not trace tags. Versions share the agent's experiment
+destinations, not trace tags. The same agent can have several such
+audiences: two teams each running it for their own users,
+per-tenant or per-customer deployments whose prompts and data must
+not cross, production deployments whose traces carry stricter
+access than non-production ones, or deployments split by region or
+jurisdiction. Versions share the agent's experiment
 for the same reason: a version is an analysis dimension recorded on
 every trace, not an access boundary, and per-version experiments
 would break the longitudinal view of an agent's behavior across
