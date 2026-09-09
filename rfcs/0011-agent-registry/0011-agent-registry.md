@@ -463,7 +463,9 @@ organized by agent and version, not by experiment.
    declares the agent and version so its traces stay labeled.
    Framework and harness autologgers respect the active destination
    and metadata, so instrumented applications need only state which
-   agent they are.
+   agent they are. Agents that export traces through OpenTelemetry
+   without the MLflow SDK pass the same agent identity and version
+   in export headers, mirroring the existing experiment-ID header.
 2. Run evaluations against the agent:
    ```python
    mlflow.genai.evaluate(data=eval_dataset,
@@ -507,14 +509,16 @@ destinations, not trace tags. Versions share the agent's experiment
 for the same reason: a version is an analysis dimension recorded on
 every trace, not an access boundary, and per-version experiments
 would break the longitudinal view of an agent's behavior across
-upgrades. So that overridden deployments stay findable from the
-agent's registry page, this RFC proposes that a deployment using a
-non-default experiment notify the registry, which records the
-experiment ID on that deployment's access binding. A deployment
-with no binding would need another place to record the link, which
-is one reason this mechanism is a proposal rather than settled.
-Automating the setup and upkeep of these links at deploy time
-belongs to the deferred registry synchronization glue.
+upgrades. Overrides do not make traces hard to find, because the
+registry keeps the list: each agent has a set of registered trace
+locations, consisting of its default experiment plus any experiment
+a deployment registers when it overrides, and the agent's page
+enumerates and searches across all of them. A deployment that
+overrides its destination must register that location with the
+agent; the default experiment itself is fixed when the agent is
+created and is never re-pointed, so locations are added rather than
+moved. Automating the registration and upkeep of these locations at
+deploy time belongs to the deferred registry synchronization glue.
 
 No endpoint is needed for any of this when the developer has the
 agent's code: the agent runs locally or in CI, autologging captures
@@ -805,10 +809,14 @@ identity alongside experiment identity. A destination identifies
 the agent only and resolves to the agent's one default experiment;
 the version is never part of the destination and is instead
 recorded on every trace and evaluation run as metadata, which is
-what per-version filtering and comparison use. Traces and eval
-results appear on the agent's registry page, filterable by version.
-The change is additive: the default experiment exists under the
-hood, and experiment-based workflows continue unchanged.
+what per-version filtering and comparison use. The default
+experiment is fixed when the agent is created; a deployment that
+sends its traces elsewhere registers that experiment as an
+additional trace location on the agent, so the agent's page always
+knows where its traces are. Traces and eval results appear on the
+agent's registry page, filterable by version. The change is
+additive: the default experiment exists under the hood, and
+experiment-based workflows continue unchanged.
 
 # Drawbacks
 
