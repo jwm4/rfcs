@@ -516,7 +516,8 @@ a deployment registers when it overrides, and the agent's page
 enumerates and searches across all of them. A deployment that
 overrides its destination must register that location with the
 agent; the default experiment itself is fixed when the agent is
-created and is never re-pointed, so locations are added rather than
+created and is never re-pointed, since re-pointing it would be
+redundant with overriding it, so locations are added rather than
 moved. Automating the registration and upkeep of these locations at
 deploy time belongs to the deferred registry synchronization glue.
 
