@@ -39,16 +39,18 @@ The Agent Registry is the third registry in a series, following the
 and the [Skill Registry
 (RFC-0008)](https://github.com/mlflow/rfcs/blob/main/rfcs/0008-mvp-skill-registry/0008-mvp-skill-registry.md).
 It completes a progression: MLflow can govern the tools an agent calls
-(MCP servers), the expertise it carries (skills), and the models it
-invokes (Model Registry), but the agent itself, the thing that acts,
-has no registry entry. This RFC adds one.
+(MCP servers), the expertise it carries (skills), the models it
+invokes (Model Registry), and the prompts it sends them (Prompt
+Registry), but the agent itself, the thing that acts, has no
+registry entry. This RFC adds one.
 
 In brief, the design takes these positions, each stated in full in
 [Design positions](#design-positions): the registry is
 record-level, not runtime-aware; an agent's versions are immutable
 snapshots of its composition (a bill of materials of skills, agent
-plugins, MCP servers, models, other agents it calls, and the harness
-or framework that runs it) plus at least one definitional anchor
+plugins, MCP servers, models, prompts, other agents it calls, and
+the harness or framework that runs it) plus at least one
+definitional anchor
 (typed source pointers, which for a harness-based agent point at its
 configuration); A2A Agent
 Cards are fetched from the agent's endpoint, never stored;
@@ -102,6 +104,7 @@ mlflow.genai.register_agent(
     agents=["agents:/acme/records-agent/2"],
     mcp_servers=["mcp-servers:/acme.internal/payments-db/2.0.0"],
     models=["models:/acme-billing-llm/3", "gpt-4o"],
+    prompts=["prompts:/billing-system-prompt/4"],
     framework="langgraph",
     framework_version="0.3.1",
 )
@@ -208,11 +211,12 @@ ways.
    answered by asking around.
 
 2. **Composition is untracked.** An agent is a composition of skills,
-   MCP servers, and models, each versioned independently. No record
-   captures which versions of which components a given build of the
-   agent used. When behavior changes, "something changed and the
-   agent broke; what was it?" requires reconstructing the composition
-   from memory, commit history, and luck.
+   MCP servers, models, and prompts, each versioned independently.
+   No record captures which versions of which components a given
+   build of the agent used. When behavior changes, "something
+   changed and the agent broke; what was it?" requires
+   reconstructing the composition from memory, commit history, and
+   luck.
 
 3. **Experiments do not map to agents.** MLflow traces and evaluation
    runs attach to experiments. Experiments fit training workflows,
@@ -626,7 +630,8 @@ every affected agent without inspecting deployments one by one.
 
 The same query works for the other BOM axes ("which agents use MCP
 server Y whose tool schema changed?", "which agents call model Z
-being retired?") and for source entries: "which agents ship OCI
+being retired?", "which agents send prompt W, whose latest edit
+regressed?") and for source entries: "which agents ship OCI
 image X?" is the container-CVE variant. Agent references close the
 highest-impact case: "which agents call the compromised agent?" is
 a query over the same axis. Agent plugin references
@@ -721,7 +726,9 @@ SDK namespace, following the pattern of RFC-0004 and RFC-0008:
   references (a plugin is referenced as a composed unit and expands
   through its registered members for queries), MCP server
   references, model references (registry models or external model
-  identifiers such as `gpt-4o`), references to other agents it calls
+  identifiers such as `gpt-4o`), prompt references (Prompt Registry
+  entries, which cover system prompts and any other prompt the agent
+  sends a model), references to other agents it calls
   (pinned to a version when the referencing team controls the
   callee's deployment, as with a set of agents versioned and
   deployed together as one application, and name-level when the
@@ -766,16 +773,18 @@ and `semver`; `freeform` versions order by registration time.
 BOM entries are soft references, structured values rather than
 foreign keys. They resolve against the Skill Registry (which
 RFC-0008 defines for both skills and agent plugins), MCP Server
-Registry, and Model Registry when matching entries exist, and they
-remain valid when they do not. This makes cross-registry questions
-("which agents use skill X?") answerable as registry queries
-without constraining registration order.
+Registry, Model Registry, and Prompt Registry when matching entries
+exist, and they remain valid when they do not. This makes
+cross-registry questions ("which agents use skill X?") answerable
+as registry queries without constraining registration order.
 
 **The BOM is a component inventory, not a complete recipe.** Its
 structured axes exist because corresponding registries or identifier
 conventions exist, so it is bounded by MLflow's governance surface
-rather than by agent anatomy: an agent's prompt strategy or memory
-configuration has no axis because nothing governs one. Three layers
+rather than by agent anatomy: an agent's prompts have an axis
+because the Prompt Registry governs them, while its memory
+configuration or context-compaction strategy has none because
+nothing governs one. Three layers
 share the job of describing an agent. Structured BOM references are
 selective but queryable across agents. Definitional anchors (source
 pointers) are complete but opaque: they
