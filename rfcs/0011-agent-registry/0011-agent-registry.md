@@ -47,9 +47,10 @@ In brief, the design takes these positions, each stated in full in
 [Design positions](#design-positions): the registry is
 record-level, not runtime-aware; an agent's versions are immutable
 snapshots of its composition (a bill of materials of skills, agent
-plugins, MCP servers, models, and other agents it calls) plus at
-least one definitional anchor (typed source pointers, which for a
-harness-based agent point at its configuration); A2A Agent
+plugins, MCP servers, models, other agents it calls, and the harness
+or framework that runs it) plus at least one definitional anchor
+(typed source pointers, which for a harness-based agent point at its
+configuration); A2A Agent
 Cards are fetched from the agent's endpoint, never stored;
 endpoints are mutable, protocol-typed access bindings rather than
 version fields; and an agent is a trace destination with one
@@ -98,6 +99,8 @@ mlflow.genai.register_agent(
     agents=["agents:/acme/records-agent/2"],
     mcp_servers=["mcp-servers:/acme.internal/payments-db/2.0.0"],
     models=["models:/acme-billing-llm/3", "gpt-4o"],
+    framework="langgraph",
+    framework_version="0.3.1",
 )
 ```
 
@@ -717,9 +720,15 @@ SDK namespace, following the pattern of RFC-0004 and RFC-0008:
   (pinned to a version when the referencing team controls the
   callee's deployment, as with a set of agents versioned and
   deployed together as one application, and name-level when the
-  callee is independently managed), and, for agents that run as
-  configurations of a packaged harness, a harness reference (a
-  proposed axis; see [Open questions](#open-questions)). Each
+  callee is independently managed), and a reference to what runs
+  the agent: a harness reference for agents that run as
+  configurations of a packaged application (OpenCode, Claude Code),
+  or a framework reference for agents built on an agent framework
+  (LangGraph, CrewAI), each with a version. Harness and framework
+  values come from a set of well-known identifiers shipped with
+  MLflow, with `other` plus a free-text name as the escape hatch,
+  the same shape as the binding protocol field, so that spelling
+  variants of well-known names cannot fragment queries. Each
   version also carries at least one **definitional anchor**: source
   provenance, as one or more typed source pointers of the kinds the
   Skill Registry supports (a Git repo and ref, an OCI image, a zip
@@ -896,17 +905,6 @@ TBD.
   configuration as the version's source, pointed at through the same
   typed source pointers used for skill content. Sub-questions:
 
-  - Should a harness axis wait for some notion of harness identity
-    governance?
-  - What are the identifier semantics of a harness reference? The
-    options are an opaque asserted name/version pair; an open
-    vocabulary in which free-text names are always accepted but
-    names matching MLflow's known harness integrations are
-    recognized and normalized; or a resolvable package identity. The
-    open vocabulary is the likely landing: fragmented spellings
-    would undermine cross-agent queries, while no single package
-    ecosystem could serve as an authority given how heterogeneously
-    harnesses are distributed.
   - Should the set of files that constitutes a harness's
     configuration surface be defined by per-harness integrations
     (the harness integrations contemplated by the skill tracing
