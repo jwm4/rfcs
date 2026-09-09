@@ -53,9 +53,12 @@ or framework that runs it) plus at least one definitional anchor
 configuration); A2A Agent
 Cards are fetched from the agent's endpoint, never stored;
 endpoints are mutable, protocol-typed access bindings rather than
-version fields; and an agent is a trace destination with one
-default experiment, with the version recorded on every trace and
-evaluation run.
+version fields; and for GenAI work an agent, not an experiment, is
+the entity users create and trace against: it carries the
+traces-and-evaluations experience, with a default trace location
+plus one per deployment that needs its own, and the version
+recorded on every trace and evaluation run, while experiments
+continue for model training and underneath.
 
 **Relationship to other RFCs.** RFC-0004 establishes the access
 binding pattern this RFC reuses (its canonical-payload pattern is
@@ -456,14 +459,16 @@ organized by agent and version, not by experiment.
    `mlflow.genai.get_default_experiment_id("acme/billing-agent")`,
    where `get_default_experiment_id` is a public lookup that takes
    only the agent: the version is never part of the destination. (An
-   `MlflowAgentLocation` naming the agent works anywhere MLflow
+   `MlflowAgentTraceLocation` naming the agent works anywhere MLflow
    accepts a trace destination.) Second,
    it records the agent and version as trace-level metadata, the way
    session and user metadata are recorded today; this is what
    per-version filtering and comparison use. A deployment that
-   overrides its destination (below) swaps only the first piece,
-   pointing `set_experiment` at its own experiment, and still
-   declares the agent and version so its traces stay labeled.
+   needs its own trace location (below) names it instead:
+   `set_active_agent("acme/billing-agent", version=3,
+   deployment="prod-eu")` resolves to that deployment's location
+   and still records the agent and version so the traces stay
+   labeled.
    Framework and harness autologgers respect the active destination
    and metadata, so instrumented applications need only state which
    agent they are. Agents that export traces through OpenTelemetry
@@ -497,37 +502,37 @@ experiment-based workflows (including model training and
 fine-tuning) continue unchanged. The change is additive, not a data
 model rewrite.
 
-The default experiment is a default, not a router. A running agent
-logs traces to whatever destination its own deployment
-configuration sets; the registry is not in the call path. When
-nothing is set, traces land in the agent's default experiment,
+The default trace location is a default, not a router. A running
+agent logs traces to whatever location its own deployment
+configuration names; the registry is not in the call path. When
+nothing is named, traces land in the agent's default location,
 which is the right behavior for the development loop and
 registry-driven evaluations. Scale-out replicas of one deployment
 share its configuration, so their traces aggregate without further
-arrangement. A deployment that needs its traces kept separate from
-other deployments of the same agent (a different owner or user
-base) overrides the destination in its own configuration; because
-permissions are experiment-scoped, separation is done with
-destinations, not trace tags. The same agent can have several such
-audiences: two teams each running it for their own users,
-per-tenant or per-customer deployments whose prompts and data must
-not cross, production deployments whose traces carry stricter
-access than non-production ones, or deployments split by region or
-jurisdiction. Versions share the agent's experiment
-for the same reason: a version is an analysis dimension recorded on
-every trace, not an access boundary, and per-version experiments
-would break the longitudinal view of an agent's behavior across
-upgrades. Overrides do not make traces hard to find, because the
-registry keeps the list: each agent has a set of registered trace
-locations, consisting of its default experiment plus any experiment
-a deployment registers when it overrides, and the agent's page
-enumerates and searches across all of them. A deployment that
-overrides its destination must register that location with the
-agent; the default experiment itself is fixed when the agent is
-created and is never re-pointed, since re-pointing it would be
-redundant with overriding it, so locations are added rather than
-moved. Automating the registration and upkeep of these locations at
-deploy time belongs to the deferred registry synchronization glue.
+arrangement. A deployment whose traces must be kept apart from
+other deployments of the same agent gets its own trace location:
+two teams each running the agent for their own users, per-tenant
+or per-customer deployments whose prompts and data must not cross,
+production deployments whose traces carry stricter access than
+non-production ones, or deployments split by region or
+jurisdiction. Each trace location is an experiment underneath,
+which is what makes the separation enforceable, since permissions
+are experiment-scoped; separation is therefore done with locations,
+not trace tags. Versions share a location for the same reason: a
+version is an analysis dimension recorded on every trace, not an
+access boundary, and per-version locations would break the
+longitudinal view of an agent's behavior across upgrades. Locations
+never make traces hard to find, because the registry keeps the
+list: an agent's registered trace locations are its default plus
+one per registered deployment, presented on the agent's page as
+deployments of the agent and searched across as one. A deployment
+with its own location must be registered with the agent; the
+default location is fixed when the agent is created and never
+re-pointed, since re-pointing it would be redundant with
+registering a deployment, so locations are added rather than moved.
+Automatically registering deployments and their trace locations at
+deploy time is part of the registry synchronization work deferred
+in Out of scope.
 
 No endpoint is needed for any of this when the developer has the
 agent's code: the agent runs locally or in CI, autologging captures
@@ -813,24 +818,27 @@ is always MCP, an agent binding declares its protocol: `a2a`, `mcp`
 accepts an optional endpoint as a convenience that creates a
 binding.
 
-**Agents become the primary anchor for GenAI traces and
-evaluations.** Today traces and evaluation runs attach to
+**For GenAI work, an agent is the entity users create, not an
+experiment.** Today traces and evaluation runs attach to
 experiments, an abstraction that fits model training but not the
-agent development loop. This RFC makes an agent a trace
-destination: a new `MlflowAgentLocation` joins the existing
-`MlflowExperimentLocation`, usable wherever MLflow accepts a trace
-destination today, and evaluation and trace-search APIs gain agent
-identity alongside experiment identity. A destination identifies
-the agent only and resolves to the agent's one default experiment;
-the version is never part of the destination and is instead
-recorded on every trace and evaluation run as metadata, which is
-what per-version filtering and comparison use. The default
-experiment is fixed when the agent is created; a deployment that
-sends its traces elsewhere registers that experiment as an
-additional trace location on the agent, so the agent's page always
-knows where its traces are. Traces and eval results appear on the
-agent's registry page, filterable by version. The change is
-additive: the default experiment exists under the hood, and
+agent development loop. This RFC makes the agent the thing a GenAI
+user creates and traces against: the agent's page carries the
+traces-and-evaluations experience, and experiments continue as the
+entity for model training and, underneath, as the storage and
+permission unit for agent traces. Mechanically the change is
+additive: a new `MlflowAgentTraceLocation` joins the existing
+`MlflowExperimentLocation` (named to avoid confusion with an
+agent's endpoint; a shorter name is welcome), usable wherever
+MLflow accepts a trace destination today, and evaluation and
+trace-search APIs gain agent identity alongside experiment
+identity. A destination identifies the agent and optionally one of
+its deployments, never the version; the version is recorded on
+every trace and evaluation run as metadata, which is what
+per-version filtering and comparison use. An agent has one or more
+trace locations: a default, fixed when the agent is created, plus
+one for each deployment that needs its own, each an experiment
+underneath, and the agent's page presents them as deployments of
+the agent, enumerating and searching across all of them. Existing
 experiment-based workflows continue unchanged.
 
 # Drawbacks
