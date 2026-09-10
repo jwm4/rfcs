@@ -677,10 +677,25 @@ rejection.
   example a Kubernetes controller) pushing to the registry APIs
   this RFC defines. Deferred.
 - **Auto-discovery of composition.** BOMs are developer-asserted in
-  the MVP. Inferring actual composition from traces (for example,
-  from RFC-0009 `SKILL` spans) and notifying owners when assertion
-  and observation disagree is a follow-on that the span data from
-  this RFC and RFC-0009 is designed to enable.
+  the MVP. Inferring composition from traces is deliberately
+  deferred, including the user-initiated form: select traces, infer
+  the observed skills, MCP servers, models, and prompts, review the
+  proposed BOM, and register it as a draft version; and, once a
+  version exists, flag traces recorded against it that use
+  undeclared components or different component versions. That is
+  the intended shape of the follow-on, and this RFC lays its
+  groundwork: every trace carries the agent version it was recorded
+  against, which is what drift detection compares. The other half
+  is trace conventions that identify components by registry
+  reference, and coverage is uneven today. Prompts have one: MLflow
+  links a prompt loaded from the Prompt Registry to the active
+  trace by name and version. The skill tracing proposal supplies
+  one for skills (`SKILL` spans). LLM spans record the provider's
+  model name, which matches an external model identifier in the BOM
+  but not a Model Registry entry. Tool spans record a tool name and
+  no MCP server identity, so MCP server inference would rely on
+  matching tool names against registered servers' tool lists. The
+  follow-on should close those gaps before it is built.
 - **Detection of unregistered agents.** Surfacing "shadow" agents
   running without registry entries requires runtime scanning,
   which is platform work built on top of this registry.
