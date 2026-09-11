@@ -46,14 +46,14 @@ calls, tool use, timing, and token consumption as a tree of spans. What
 they do not capture is which governed, versioned skill was active during
 any part of the run.
 
-This RFC links traces to skills. A skill activation produces a
-**trace-level link** from the trace to the skill version, following
-the pattern MLflow already uses to link prompts to traces. When the
-activation is identifiable as a specific span, that span is also
-annotated with the skill's registry coordinates: workspace,
-organization, name, and version, plus the version's content digest
-when the instrumentation has it. Tool calls that use a skill's
-bundled files are annotated the same way. Each link records how it
+This RFC links traces to skills. A skill activation produces a **link**
+from the trace to the skill version, recorded through the span on which
+the activation was observed and following the pattern MLflow already
+uses to link prompts to traces. The link records that span, and the span
+is annotated with the skill's registry coordinates: workspace,
+organization, name, and version, plus the version's content digest when
+the instrumentation has it. Tool calls that use a skill's bundled files
+are annotated the same way. Each link records how it
 was produced (explicit instrumentation, in-process resolution,
 install-record matching, or content-marker inference), so consumers
 of the linkage can weigh the evidence behind it.
@@ -106,7 +106,7 @@ skill the user has installed by whatever means they choose. It does
 not specify an MLflow installer or package manager integration; an
 installer could follow later and would have to produce the same
 record. Skill
-linking follows the same trace-level association pattern as prompt
+linking follows the same lineage-record pattern as prompt
 linking and the MCP Server Registry's trace linking
 ([RFC-0004](https://github.com/mlflow/rfcs/blob/main/rfcs/0004-mcp-registry/0004-mcp-registry.md)).
 It adds activation-span annotation because skill activation, unlike
@@ -519,7 +519,8 @@ A skill link is a lineage record associating a trace with a skill
 version, stored and queried through the same entity-association
 mechanism as prompt links. A record carries:
 
-- the trace id;
+- the trace id, and the id of the span on which the activation was
+  observed, when one is identifiable;
 - the skill version's identity: `workspace`, `organization`, `name`,
   and `version`, with the association id in the URI form
   `[@organization/]name/version`;
@@ -678,10 +679,11 @@ hashing.
 
 ## UI
 
-These are the surfaces the journeys need. How linked entities are
-presented (for example, one consolidated lineage view across
-prompts, skills, and other assets rather than a tab per asset type)
-is aligned across assets outside this RFC.
+Both the content and the presentation of these surfaces will be
+decided with a designer and a prototype outside this RFC, alongside
+the same decisions for prompts and other linked assets. The list
+below is an initial draft of the content the journeys need, not a
+UI specification.
 
 - Trace view: linked skill versions listed among the trace's linked
   entities, each linking to its registry detail page; annotated spans
