@@ -132,10 +132,10 @@ mlflow.genai.register_agent(
 ```
 
 Given an endpoint, the client SDK fetches the Agent Card from the
-endpoint's well-known path, imports its descriptive metadata
-(description, capabilities, and its free-form name, which seeds the
-mutable MLflow-managed `display_name`), and creates an `a2a` access
-endpoint record for it. The card content is not persisted: the
+endpoint's well-known path, stores its description, its free-form
+name (which seeds the mutable MLflow-managed `display_name`), and
+its skills list in registry fields, and creates an `a2a` access
+endpoint record for it. The card as a document is not persisted: the
 endpoint is the card's system of record, and the UI renders the
 card read-only by fetching it through that record at view time. The
 registry `name` is always chosen by the registrant, since a card's
@@ -268,18 +268,15 @@ the record.
        models=["models:/acme-billing-llm/3"],
    )
    ```
-   Required: name, description, and at least one of: a definitional
-   anchor (one or more typed source pointers) or an A2A
-   endpoint. These combine freely; a first-party A2A agent registers
-   with both source and endpoint. Only a registration with an
-   endpoint and no anchor produces an interface-only record (see
-   below). Composition (the BOM) is required when an anchor is
-   present and may be empty or partial for interface-only records
-   (see below). Optional: tags, an explicit
-   version where the agent's version scheme takes one (the default
-   `monotonic` scheme assigns versions automatically), and an
-   endpoint (a URL plus protocol; the endpoint journey below covers
-   endpoint records).
+   Required: a name, a description, and at least one of a
+   definitional anchor (one or more typed source pointers) or an
+   endpoint. A registration with an anchor must also declare
+   composition (the BOM). Optional: tags, an explicit version where
+   the agent's version scheme takes one (the default `monotonic`
+   scheme assigns versions), and, alongside an anchor, an endpoint.
+   A registration with an endpoint and no anchor produces an
+   interface-only record, whose composition may be partial or
+   undeclared.
 2. MLflow creates an `AgentVersion` record with initial status
    `draft`.
 3. The agent appears in the registry listing for its workspace, with
@@ -287,9 +284,9 @@ the record.
    and model registry pages where matching entries exist.
 4. **A2A path:** an agent that serves an Agent Card registers from
    its endpoint. The UI registration form offers two modes, "import
-   from A2A card" and "manual"; the import mode pre-fills
-   descriptive and capability fields from the card (its free-form
-   name seeds the mutable `display_name`; the registry `name` is
+   from A2A card" and "manual"; the import mode pre-fills the
+   description and skills list from the card (its free-form name
+   seeds the mutable `display_name`; the registry `name` is
    supplied by the registrant) and creates an `a2a` access endpoint
    record for it. In the SDK and CLI, the client fetches the
    card at import; in the UI, the browser fetches it when the
@@ -340,20 +337,6 @@ the record.
    skill directories or MCP server definitions, stays out, because
    an embedded copy is invisible to cross-registry queries and can
    drift from the declared references.
-
-Composition is required wherever it is knowable, because the BOM is
-the value: a registry record without composition is just a name in
-a list. A registrant anchoring on a source has the composition in
-front of them. The registrant of a
-black-box vendor or partner agent does not, and forcing a
-declaration would invite invented BOMs that pollute cross-registry
-queries; for interface-only records the BOM may therefore be empty
-or partial, an absent BOM is recorded as *undeclared* composition
-rather than an empty dependency list, and the record is marked as
-holding no definitional anchor: the registry knows the agent's
-claim surface, not its contents. Everything else is progressive
-enrichment. The endpoint is optional; the trace-and-eval journey
-below explains which agents need one.
 
 The harness path is the newest part of this design and the least
 settled (see [Open questions](#open-questions)). For framework-built
@@ -534,13 +517,8 @@ two teams each running the agent for their own users, per-tenant
 or per-customer deployments whose prompts and data must not cross,
 production deployments whose traces carry stricter access than
 non-production ones, or deployments split by region or
-jurisdiction. Each trace location is an experiment underneath,
-which is what makes the separation enforceable, since permissions
-are experiment-scoped; separation is therefore done with locations,
-not trace tags. Versions share a location for the same reason: a
-version is an analysis dimension recorded on every trace, not an
-access boundary, and per-version locations would break the
-longitudinal view of an agent's behavior across upgrades. Locations
+jurisdiction. Versions share a location: a version is a filter
+recorded on every trace, not an audience. Locations
 never make traces hard to find, because the registry keeps the
 list: an agent's registered trace locations are its default plus
 one per registered deployment, presented on the agent's page as
@@ -553,20 +531,11 @@ Automatically registering deployments and their trace locations at
 deploy time is part of the registry synchronization work deferred
 in Out of scope.
 
-No endpoint is needed for any of this when the developer has the
-agent's code: the agent runs locally or in CI, autologging captures
-traces during execution, and evaluation scores outputs against a
-test dataset. The exception is agents whose code the user
-cannot run: another team's A2A agent, a vendor agent, a partner
-service. For those, the endpoint is the only execution surface, and
-tracing and evaluation work by invoking the agent's access endpoint
-with test inputs and observing responses. This track requires an
-endpoint whose protocol MLflow can speak: `a2a` (invoked through the
-card's declared interface) or `mcp` (through the MCP handshake). An
-`other` endpoint records where the agent lives but does not by
-itself tell MLflow how to call it, so it does not enable
-endpoint-driven tracing or evaluation. The registry supports both
-tracks; the optional endpoint exists largely for the second.
+None of this needs an endpoint when the developer has the agent's
+code: the agent runs locally or in CI, autologging captures traces
+during execution, and evaluation scores outputs against a test
+dataset. Agents whose code the user cannot run are the next
+journey.
 
 Where [RFC-0009](https://github.com/mlflow/rfcs/pull/37) annotates
 spans inside a trace with the skill that produced them, this journey
@@ -585,6 +554,42 @@ a remote callee (delegation over A2A to a separately running agent)
 produces its own trace in its own destination, linked to the
 caller's trace through propagated trace context, using the span
 links MLflow already supports for OpenTelemetry.
+
+### Vet an agent you did not build
+
+A platform or governance team must decide whether an agent the
+organization did not build, a vendor's or a partner's, may be used;
+a consuming team wants the same assurance about another team's
+deployed agent. Neither can run the agent's code, and neither has
+any access to whoever built it beyond the ability to call its
+endpoint.
+
+1. The agent is registered as an interface-only record with an
+   `a2a` endpoint (the A2A path of the register journey); its
+   composition is undeclared.
+2. The team runs an evaluation from the registry against that
+   endpoint, using its own test datasets and scorers. MLflow invokes
+   the endpoint with each test input, records the request and
+   response as a trace in the team's own MLflow instance, and scores
+   the outputs. Nothing on the agent's side is touched or seen; this
+   is black-box evaluation.
+3. The results appear on the agent's page like any other evaluation
+   run. The run records the agent version as usual and, for an A2A
+   agent, the card's own version string read at run time, so that a
+   later change in behavior can be matched to a change on the
+   provider's side.
+4. The results gate the lifecycle decision (next journey): the
+   record is promoted to `active` once the agent meets the
+   organization's bar and stays `draft` otherwise.
+5. The team reruns the same evaluation on a schedule, because a
+   third party can change the agent behind the endpoint without
+   notice, and the agent's page holds the history of runs.
+
+This journey needs an endpoint whose protocol MLflow can speak:
+`a2a`, invoked through the card's declared interface, or `mcp`,
+through the MCP handshake. An `other` endpoint records where the
+agent lives but does not tell MLflow how to call it, so it does not
+enable endpoint-driven evaluation.
 
 ### Manage an agent's lifecycle
 
@@ -837,11 +842,15 @@ grows.
 [A2A protocol](https://a2a-protocol.org/) makes an agent's endpoint
 the authoritative home of its Agent Card: every A2A client reads
 the live card from the endpoint's well-known path, and the registry
-follows suit. Registering from an endpoint imports the card's
-descriptive metadata (description, capabilities, and its free-form
-name, which seeds the mutable MLflow-managed `display_name`) into
-ordinary registry fields and creates an `a2a` access endpoint; the
-card content itself is not persisted. The display name stays,
+follows suit. Registering from an endpoint stores three things
+from the card in ordinary registry fields: its description, its
+free-form name (which seeds the mutable MLflow-managed
+`display_name`), and its skills list with each entry's tags, which
+is what lets an agent be searched for by what it does. A2A's
+"skills" are the card's own account of what the agent can do, not
+Skill Registry entries; the two share a word and nothing else.
+Registration also creates an `a2a` access endpoint. The card as a
+document is not persisted. The display name stays,
 although the Skill Registry dropped its own, because an agent's
 registry name carries no human-readability guarantee: a skill name
 is a slash command users type, readable by construction, while an
@@ -856,7 +865,16 @@ record is the agent itself. An agent registered from an endpoint
 alone, with no source, is an
 **interface-only record**: the registry captures the claim surface
 (identity, imported metadata, endpoint) and marks that it holds no
-definitional anchor.
+definitional anchor. Anchored records must declare their
+composition, because the BOM is the registry's value and a
+registrant with the source in front of them can supply it.
+Interface-only records may declare composition as partial or
+undeclared, because the registrant of a black-box agent cannot
+supply it truthfully, and forcing a declaration would invite
+invented BOMs that pollute cross-registry queries. An absent BOM is
+recorded as *undeclared* composition rather than an empty
+dependency list: the registry knows the agent's claim surface, not
+its contents.
 
 **Endpoints are separate records, not version fields.** Some agents
 are reachable at a URL (A2A agents inherently; deployed agents
@@ -897,9 +915,15 @@ its deployments, never the version; the version is recorded on
 every trace and evaluation run as metadata, which is what
 per-version filtering and comparison use. An agent has one or more
 trace locations: a default, fixed when the agent is created, plus
-one for each deployment that needs its own, each an experiment
-underneath, and the agent's page presents them as deployments of
-the agent, enumerating and searching across all of them. Existing
+one for each deployment that needs its own. Each location is an
+experiment underneath, which is what makes the separation
+enforceable: MLflow permissions are experiment-scoped, so audiences
+are kept apart by location, not by trace tag. Versions never get
+locations of their own; a version is an analysis dimension, not an
+access boundary, and per-version locations would break the
+longitudinal view of an agent's behavior across upgrades. The
+agent's page presents the locations as deployments of the agent,
+enumerating and searching across all of them. Existing
 experiment-based workflows continue unchanged.
 
 # Drawbacks
