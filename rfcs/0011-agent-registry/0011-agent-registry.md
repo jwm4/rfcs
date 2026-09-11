@@ -54,16 +54,17 @@ definitional anchor
 (typed source pointers, which for a harness-based agent point at its
 configuration); A2A Agent
 Cards are fetched from the agent's endpoint, never stored;
-endpoints are mutable, protocol-typed access bindings rather than
-version fields; and for GenAI work an agent, not an experiment, is
-the entity users create and trace against: it carries the
+endpoints are mutable, protocol-typed access endpoint records
+rather than version fields; and for GenAI work an agent, not an
+experiment, is the entity users create and trace against: it
+carries the
 traces-and-evaluations experience, with a default trace location
 plus one per deployment that needs its own, and the version
 recorded on every trace and evaluation run, while experiments
 continue for model training and underneath.
 
 **Relationship to other RFCs.** RFC-0004 establishes the access
-binding pattern this RFC reuses (its canonical-payload pattern is
+endpoint pattern this RFC reuses (its canonical-payload pattern is
 deliberately not applied to Agent Cards; see
 [Design positions](#design-positions)). RFC-0008 defines
 the skills and agent plugins that agent BOMs reference; note that an
@@ -90,7 +91,8 @@ import mlflow
 from mlflow.genai import GitSource
 
 mlflow.genai.register_agent(
-    name="acme/billing-agent",
+    organization="acme",
+    name="billing-agent",
     description="Answers customer billing questions.",
     sources=[
         GitSource(
@@ -101,7 +103,7 @@ mlflow.genai.register_agent(
     ],
     skills=["skills:/billing-policy/1", "skills:/refund-rules/2"],
     agent_plugins=["agent-plugins:/billing-workflow/1.2.0"],
-    agents=["agents:/acme/records-agent/2"],
+    agents=["agents:/@acme/records-agent/2"],
     mcp_servers=["mcp-servers:/acme.internal/payments-db/2.0.0"],
     models=["models:/acme-billing-llm/3", "gpt-4o"],
     prompts=["prompts:/billing-system-prompt/4"],
@@ -122,7 +124,8 @@ the rationale).
 
 ```python
 mlflow.genai.register_agent(
-    name="acme/travel-agent",
+    organization="acme",
+    name="travel-agent",
     a2a_endpoint="https://agents.acme.internal/travel",
     skills=["skills:/itinerary-planning/4"],
 )
@@ -132,9 +135,9 @@ Given an endpoint, the client SDK fetches the Agent Card from the
 endpoint's well-known path, imports its descriptive metadata
 (description, capabilities, and its free-form name, which seeds the
 mutable MLflow-managed `display_name`), and creates an `a2a` access
-binding for the endpoint. The card content is not persisted: the
+endpoint record for it. The card content is not persisted: the
 endpoint is the card's system of record, and the UI renders the
-card read-only by fetching it through the binding at view time. The
+card read-only by fetching it through that record at view time. The
 registry `name` is always chosen by the registrant, since a card's
 `name` is a display string, not an identity. Fetches happen in the
 client, never in the registry server, consistent with RFC-0008; a
@@ -147,7 +150,8 @@ interface-only record (see the register journey).
 
 ```python
 mlflow.genai.register_agent(
-    name="acme/oncall-helper",
+    organization="acme",
+    name="oncall-helper",
     description="On-call assistant run in OpenCode.",
     harness="opencode",
     harness_version="0.5.3",
@@ -174,7 +178,7 @@ stored.
 ## Trace and evaluate against the agent
 
 ```python
-mlflow.genai.set_active_agent("acme/billing-agent", version=3)
+mlflow.genai.set_active_agent("agents:/@acme/billing-agent", version=3)
 
 with mlflow.start_span(name="answer-question"):
     result = agent.run(question)
@@ -182,7 +186,7 @@ with mlflow.start_span(name="answer-question"):
 mlflow.genai.evaluate(
     data=eval_dataset,
     scorers=[correctness_scorer],
-    agent_id="acme/billing-agent",
+    agent_id="agents:/@acme/billing-agent",
     agent_version=3,
 )
 ```
@@ -252,7 +256,8 @@ the record.
    composition:
    ```python
    mlflow.genai.register_agent(
-       name="acme/billing-agent",
+       organization="acme",
+       name="billing-agent",
        description="Answers customer billing questions.",
        sources=[GitSource(
            url="https://github.com/acme/billing-agent.git",
@@ -274,7 +279,7 @@ the record.
    version where the agent's version scheme takes one (the default
    `monotonic` scheme assigns versions automatically), and an
    endpoint (a URL plus protocol; the endpoint journey below covers
-   bindings).
+   endpoint records).
 2. MLflow creates an `AgentVersion` record with initial status
    `draft`.
 3. The agent appears in the registry listing for its workspace, with
@@ -285,8 +290,8 @@ the record.
    from A2A card" and "manual"; the import mode pre-fills
    descriptive and capability fields from the card (its free-form
    name seeds the mutable `display_name`; the registry `name` is
-   supplied by the registrant) and creates an `a2a` access binding
-   for the endpoint. In the SDK and CLI, the client fetches the
+   supplied by the registrant) and creates an `a2a` access endpoint
+   record for it. In the SDK and CLI, the client fetches the
    card at import; in the UI, the browser fetches it when the
    endpoint permits, or the user pastes it, since the server never
    fetches user-supplied URLs. The BOM is supplied alongside, since
@@ -303,7 +308,8 @@ the record.
    that defines it:
    ```python
    mlflow.genai.register_agent(
-       name="acme/oncall-helper",
+       organization="acme",
+       name="oncall-helper",
        description="On-call assistant run in OpenCode.",
        harness="opencode",
        harness_version="0.5.3",
@@ -368,12 +374,12 @@ disturbing the immutable version history.
 
 1. The agent is already registered (any path above) and a version
    has been promoted. The platform team deploys it.
-2. The operator creates an access binding for the deployment,
+2. The operator creates an access endpoint for the deployment,
    targeting a version or an alias and declaring the endpoint's
    protocol:
    ```python
-   mlflow.genai.create_agent_access_binding(
-       agent="acme/billing-agent",
+   mlflow.genai.create_agent_access_endpoint(
+       agent="agents:/@acme/billing-agent",
        target_alias="production",
        endpoint_url="https://agents.acme.internal/billing",
        protocol="a2a",
@@ -381,34 +387,35 @@ disturbing the immutable version history.
    )
    ```
    The endpoint accepted at registration time is sugar for creating
-   a binding; the A2A registration path creates an `a2a` binding
-   automatically. Two optional fields describe the deployment
+   this record; the A2A registration path creates an `a2a` endpoint
+   record automatically. Two optional fields describe the deployment
    without recording its state: `platform_url` links to wherever
    the serving platform shows this deployment (a console page, a
    Kubernetes resource), and a free-text `description` holds
    connection notes.
-3. The agent's detail page lists its bindings. Bindings whose
+3. The agent's detail page lists its access endpoints. Those whose
    protocol is self-describing (`a2a`, `mcp`) are actionable: they
    are the entry points for the endpoint-driven tracing and
    evaluation in the trace-and-eval journey below. They are also
    how a developer, or another agent, goes from a registry search
-   to a live endpoint: the binding gives the URL, and the protocol
-   gives the rest. An `other` binding is a documented pointer, and
+   to a live endpoint: the record gives the URL, and the protocol
+   gives the rest. An `other` endpoint is a documented pointer, and
    its `description` is where the operator says how to call it.
 4. The deployment moves to a new URL. The operator updates the
-   binding; no version record changes.
-5. The deployment is retired. The operator deletes the binding; the
+   endpoint record; no version record changes.
+5. The deployment is retired. The operator deletes the record; the
    agent, its versions, and its history remain untouched.
 
-The protocol field is where agent bindings depart from RFC-0004,
-whose bindings are always MCP and vary only by transport. The field
+The protocol field is where agent access endpoints depart from the
+MCP Server Registry's, which are always MCP and vary only by
+transport. The field
 is limited to values that tell a caller something actionable: `a2a`
 and `mcp` are self-describing (an Agent Card at the well-known
 path; the MCP handshake), so URL plus protocol is enough to
 connect. Labels like REST or gRPC name a transport without telling
 anyone how to call the agent, so they are deliberately collapsed
 into `other`, which records where an agent lives without claiming
-MLflow can invoke it. As in RFC-0004, a binding that targets an
+MLflow can invoke it. As in RFC-0004, an endpoint that targets an
 alias such as `production` follows the alias as it moves between
 versions.
 
@@ -459,7 +466,7 @@ organized by agent and version, not by experiment.
 
 1. Log traces against the agent instead of an experiment:
    ```python
-   mlflow.genai.set_active_agent("acme/billing-agent", version=3)
+   mlflow.genai.set_active_agent("agents:/@acme/billing-agent", version=3)
 
    with mlflow.start_span(name="answer-question"):
        result = agent.run(question)
@@ -468,7 +475,7 @@ organized by agent and version, not by experiment.
    First, it sets the trace destination to the agent's one default
    experiment, equivalent to calling `mlflow.set_experiment` on the
    result of
-   `mlflow.genai.get_default_experiment_id("acme/billing-agent")`,
+   `mlflow.genai.get_default_experiment_id("agents:/@acme/billing-agent")`,
    where `get_default_experiment_id` is a public lookup that takes
    only the agent: the version is never part of the destination. (An
    `MlflowAgentTraceLocation` naming the agent works anywhere MLflow
@@ -477,7 +484,7 @@ organized by agent and version, not by experiment.
    session and user metadata are recorded today; this is what
    per-version filtering and comparison use. A deployment that
    needs its own trace location (below) names it instead:
-   `set_active_agent("acme/billing-agent", version=3,
+   `set_active_agent("agents:/@acme/billing-agent", version=3,
    deployment="prod-eu")` resolves to that deployment's location
    and still records the agent and version so the traces stay
    labeled.
@@ -490,7 +497,7 @@ organized by agent and version, not by experiment.
    ```python
    mlflow.genai.evaluate(data=eval_dataset,
                          scorers=[correctness_scorer],
-                         agent_id="acme/billing-agent",
+                         agent_id="agents:/@acme/billing-agent",
                          agent_version=3)
    ```
    As with tracing, `agent_id` determines where the results land
@@ -552,11 +559,11 @@ traces during execution, and evaluation scores outputs against a
 test dataset. The exception is agents whose code the user
 cannot run: another team's A2A agent, a vendor agent, a partner
 service. For those, the endpoint is the only execution surface, and
-tracing and evaluation work by invoking the agent's access binding
-with test inputs and observing responses. This track requires a
-binding whose protocol MLflow can speak: `a2a` (invoked through the
+tracing and evaluation work by invoking the agent's access endpoint
+with test inputs and observing responses. This track requires an
+endpoint whose protocol MLflow can speak: `a2a` (invoked through the
 card's declared interface) or `mcp` (through the MCP handshake). An
-`other` binding records where the agent lives but does not by
+`other` endpoint records where the agent lives but does not by
 itself tell MLflow how to call it, so it does not enable
 endpoint-driven tracing or evaluation. The registry supports both
 tracks; the optional endpoint exists largely for the second.
@@ -676,8 +683,8 @@ rejection.
   affected?" question is that join, with this registry supplying the
   consumer-and-owner half.
 - **Deployment and orchestration.** The registry does not deploy
-  agents. Access bindings record where an approved endpoint is; they
-  do not create it.
+  agents. Access endpoint records say where an approved endpoint
+  is; they do not create it.
 - **Registry synchronization from deployments.** Auto-registering
   agents when they deploy, keeping BOMs fresh when composition
   changes at deploy time, and maintaining deployment trace-location
@@ -713,9 +720,10 @@ rejection.
 - **Agent-to-agent discovery beyond search.** The registry answers
   the first half of "find me an agent that can do X and call it": a
   developer or an agent can search it, and an `a2a` or `mcp`
-  binding leads to a live endpoint whose protocol describes the
-  rest, an Agent Card in one case and the MCP handshake in the
-  other. The second half is a gateway concern: routing requests,
+  access endpoint leads to a live endpoint whose protocol
+  describes the rest, an Agent Card in one case and the MCP
+  handshake in the other. The second half is a gateway concern:
+  routing requests,
   choosing among live instances by health or load, and mediating
   authentication are not registry functions.
 - **Cost attribution.** Per-agent token cost is an observability
@@ -744,11 +752,15 @@ registry and a gateway.
 The registry manages two primary entities under the `mlflow.genai`
 SDK namespace, following the pattern of RFC-0004 and RFC-0008:
 
-- **Agent**: a named, owned entity with DNS-style naming
-  (`org/agent-name`), in the spirit of the namespaced names the MCP
-  and Skill registries use; exact alignment with RFC-0008's
-  `{workspace, organization, name}` coordinates is a detailed-design
-  point.
+- **Agent**: a named, owned entity addressed by the same
+  coordinates the Skill Registry uses, `(workspace, organization,
+  name)`, with `organization` an optional field rather than a
+  segment of the name, and referenced in the same grammar
+  (`agents:/@acme/billing-agent/2`). Nothing external constrains
+  agent naming (an A2A card's name is free-form), so consistency
+  with the sibling MLflow-native registry decides; MCP server names
+  differ only because the upstream MCP registry specification fixes
+  them.
 - **AgentVersion**: an immutable snapshot of the agent's composition,
   its **bill of materials (BOM)**: skill references, agent plugin
   references (a plugin is referenced as a composed unit and expands
@@ -767,7 +779,7 @@ SDK namespace, following the pattern of RFC-0004 and RFC-0008:
   (LangGraph, CrewAI), each with a version. Harness and framework
   values come from a set of well-known identifiers shipped with
   MLflow, with `other` plus a free-text name as the escape hatch,
-  the same shape as the binding protocol field, so that spelling
+  the same shape as the endpoint protocol field, so that spelling
   variants of well-known names cannot fragment queries. Each
   version also carries at least one **definitional anchor**: source
   provenance, as one or more typed source pointers of the kinds the
@@ -828,9 +840,14 @@ the live card from the endpoint's well-known path, and the registry
 follows suit. Registering from an endpoint imports the card's
 descriptive metadata (description, capabilities, and its free-form
 name, which seeds the mutable MLflow-managed `display_name`) into
-ordinary registry fields and creates an `a2a` access binding; the
-card content itself is not persisted. The UI renders the card
-read-only by fetching it through the binding at view time, so what
+ordinary registry fields and creates an `a2a` access endpoint; the
+card content itself is not persisted. The display name stays,
+although the Skill Registry dropped its own, because an agent's
+registry name carries no human-readability guarantee: a skill name
+is a slash command users type, readable by construction, while an
+agent's identity comes from a protocol name or an endpoint path,
+named for a purpose, an operation, or both. The UI renders the card
+read-only by fetching it through the endpoint at view time, so what
 MLflow displays can never drift from what the agent serves. This
 deliberately departs from the canonical-payload pattern of RFC-0004
 (`server_json`) and RFC-0008 (`plugin.json`): MLflow is the system
@@ -841,24 +858,26 @@ alone, with no source, is an
 (identity, imported metadata, endpoint) and marks that it holds no
 definitional anchor.
 
-**Endpoints are access bindings, not version fields.** Some agents
+**Endpoints are separate records, not version fields.** Some agents
 are reachable at a URL (A2A agents inherently; deployed agents
 generally), and recording that URL lets the registry drive tracing
 and evaluation for agents whose code the user cannot run. But
 endpoints change independently of composition, and agent versions
-are immutable. Following RFC-0004's `MCPAccessBinding` model,
-approved endpoints are separate mutable binding records that target
-a version or alias, created and deleted as connectivity changes
-without touching version history. Where an MCP binding's protocol
-is always MCP, an agent binding declares its protocol: `a2a`, `mcp`
-(for agents exposed as MCP servers), or `other`. A binding may
+are immutable. Following the MCP Server Registry's access endpoint
+model (`MCPAccessEndpoint` in the implementation; the RFC text
+still calls it `MCPAccessBinding`), approved endpoints are separate
+mutable **access endpoint** records that target a version or
+alias, created and deleted as connectivity changes without touching
+version history. Where an MCP access endpoint's protocol is always
+MCP, an agent's declares it: `a2a`, `mcp` (for agents exposed as
+MCP servers), or `other`. The record may
 also carry a free-text `description` and a `platform_url`, both
 optional: the description tells a caller how to use an endpoint
 whose protocol does not say, and the platform URL points at the
 serving platform's own view of the deployment, so that runtime
 state stays with the platform while the registry records where to
 find it. Registration accepts an optional endpoint as a
-convenience that creates a binding.
+convenience that creates the record.
 
 **For GenAI work, an agent is the entity users create, not an
 experiment.** Today traces and evaluation runs attach to
@@ -913,7 +932,7 @@ TBD.
 
 - **How thin may an interface-only record be?** A black-box A2A
   agent registers with a name, metadata imported from its card, an
-  access binding, undeclared composition, and no definitional
+  access endpoint, undeclared composition, and no definitional
   anchor. Is that enough of a record to be worth governing, and
   should the registry require anything more of it before such a
   record can be promoted to `active`?
@@ -930,7 +949,7 @@ TBD.
   prefer a narrower registry RFC, the journey splits cleanly along
   the RFC-0008/0009 seam.
 
-- **Do endpoint records belong in MLflow at all?** The access binding
+- **Do endpoint records belong in MLflow at all?** The access endpoint
   model resolves the mechanical objections to endpoints (mutability
   against immutable versions, staleness on version records), and
   RFC-0004 sets the precedent. The remaining objection is
@@ -942,7 +961,7 @@ TBD.
   the registry cannot trace or evaluate agents whose code the user
   cannot run. This boundary needs explicit review. A related
   sub-question: when an agent is exposed as an MCP server, should an
-  `mcp` binding cross-reference the MCP Registry entry for the same
+  `mcp` endpoint cross-reference the MCP Registry entry for the same
   endpoint instead of duplicating it?
 
 - **How should harness-based agents be described?** Agents that run
@@ -979,8 +998,9 @@ TBD.
 - **What is the BOM reference format?** The journeys sketch URI-style
   references (`skills:/billing-policy/1`,
   `mcp-servers:/acme.internal/payments-db/2.0.0`,
-  `models:/acme-billing-llm/3`). The skill scheme follows RFC-0008's
-  member references. RFC-0004 defines no MCP URI scheme, so the MCP
+  `models:/acme-billing-llm/3`). The skill and agent schemes follow
+  the Skill Registry's member references, including the
+  `@organization` prefix. RFC-0004 defines no MCP URI scheme, so the MCP
   scheme adopts the `mcp-servers:/` proposal from RFC-0010; the refs
   here respect RFC-0004's reverse-DNS server names and semantic
   versions. Bare identifiers cover external models (`gpt-4o`). BOM
