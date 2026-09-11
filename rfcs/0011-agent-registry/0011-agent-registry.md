@@ -377,16 +377,24 @@ disturbing the immutable version history.
        target_alias="production",
        endpoint_url="https://agents.acme.internal/billing",
        protocol="a2a",
+       platform_url="https://console.acme.internal/agents/billing-prod",
    )
    ```
    The endpoint accepted at registration time is sugar for creating
    a binding; the A2A registration path creates an `a2a` binding
-   automatically.
+   automatically. Two optional fields describe the deployment
+   without recording its state: `platform_url` links to wherever
+   the serving platform shows this deployment (a console page, a
+   Kubernetes resource), and a free-text `description` holds
+   connection notes.
 3. The agent's detail page lists its bindings. Bindings whose
    protocol is self-describing (`a2a`, `mcp`) are actionable: they
    are the entry points for the endpoint-driven tracing and
-   evaluation in the trace-and-eval journey below. An `other`
-   binding is a documented pointer.
+   evaluation in the trace-and-eval journey below. They are also
+   how a developer, or another agent, goes from a registry search
+   to a live endpoint: the binding gives the URL, and the protocol
+   gives the rest. An `other` binding is a documented pointer, and
+   its `description` is where the operator says how to call it.
 4. The deployment moves to a new URL. The operator updates the
    binding; no version record changes.
 5. The deployment is retired. The operator deletes the binding; the
@@ -702,9 +710,14 @@ rejection.
 - **Automated notifications.** The blast-radius journey ends with the
   registry naming owners; notifying them is left to the organization
   in the MVP.
-- **Agent-to-agent runtime discovery.** A programmatic "find me an
-  agent that can do X and call it" surface for running agents is a
-  gateway concern, as is any request routing.
+- **Agent-to-agent discovery beyond search.** The registry answers
+  the first half of "find me an agent that can do X and call it": a
+  developer or an agent can search it, and an `a2a` or `mcp`
+  binding leads to a live endpoint whose protocol describes the
+  rest, an Agent Card in one case and the MCP handshake in the
+  other. The second half is a gateway concern: routing requests,
+  choosing among live instances by health or load, and mediating
+  authentication are not registry functions.
 - **Cost attribution.** Per-agent token cost is an observability
   rollup over agent-linked traces, not registry metadata.
 - **Cross-workspace federation.** Discovery across registries is
@@ -838,9 +851,14 @@ approved endpoints are separate mutable binding records that target
 a version or alias, created and deleted as connectivity changes
 without touching version history. Where an MCP binding's protocol
 is always MCP, an agent binding declares its protocol: `a2a`, `mcp`
-(for agents exposed as MCP servers), or `other`. Registration
-accepts an optional endpoint as a convenience that creates a
-binding.
+(for agents exposed as MCP servers), or `other`. A binding may
+also carry a free-text `description` and a `platform_url`, both
+optional: the description tells a caller how to use an endpoint
+whose protocol does not say, and the platform URL points at the
+serving platform's own view of the deployment, so that runtime
+state stays with the platform while the registry records where to
+find it. Registration accepts an optional endpoint as a
+convenience that creates a binding.
 
 **For GenAI work, an agent is the entity users create, not an
 experiment.** Today traces and evaluation runs attach to
