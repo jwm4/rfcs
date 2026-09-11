@@ -7,7 +7,7 @@
 
 | Author(s)              | [Bill Murdock](https://github.com/jwm4) (Red Hat) |
 | :--------------------- | :-- |
-| **Date Last Modified** | 2026-08-27 |
+| **Date Last Modified** | 2026-09-11 |
 | **AI Assistant(s)**    | Claude Code |
 
 **Table of contents**
@@ -19,6 +19,12 @@
   - [User journeys](#user-journeys)
   - [Out of scope](#out-of-scope)
 - [Detailed design](#detailed-design)
+  - [Link model](#link-model)
+  - [SDK method and attribute contract](#sdk-method-and-attribute-contract)
+  - [Queries](#queries)
+  - [Install record](#install-record)
+  - [Autologger behavior](#autologger-behavior)
+  - [UI](#ui)
 - [Drawbacks](#drawbacks)
 - [Alternatives](#alternatives)
 - [Adoption strategy](#adoption-strategy)
@@ -78,10 +84,11 @@ Links are recorded along three paths:
   OpenTelemetry output rather than by running instrumentation inside
   them are handled like the equivalent harnesses (see the harness
   journey).
-- **Automatic instrumentation in harnesses.** When MLflow installs
-  a skill into a harness such as Claude Code, it records which
-  registry coordinates the harness-local skill came from. The harness
-  autologger reads that record at run time to link and annotate.
+- **Automatic instrumentation in harnesses.** When a skill installed
+  into a harness such as Claude Code is tracked with MLflow, MLflow
+  records which registry coordinates the harness-local skill came
+  from. The harness autologger reads that record at run time to link
+  and annotate.
 
 Because traces carry skill links, they become queryable by skill. That
 query surface is what turns tracing into governance evidence: adoption
@@ -93,10 +100,12 @@ regression detection across skill versions.
 which defines the `Skill` and `SkillVersion` entities, the
 `{workspace, organization, name, version}` coordinates, and the
 client-asserted content `digest` that this RFC records on links.
-Because the harness path depends on the install-time record described
-above, harness installation commands and the package manager
-integration behind them are in scope for this RFC (see
-[Open questions](#open-questions) for the scope discussion). Skill
+The harness path depends on the install record described above, so
+this RFC specifies that record and the command that writes it for a
+skill the user has installed by whatever means they choose. It does
+not specify an MLflow installer or package manager integration; an
+installer could follow later and would have to produce the same
+record. Skill
 linking follows the same trace-level association pattern as prompt
 linking and the MCP Server Registry's trace linking
 ([RFC-0004](https://github.com/mlflow/rfcs/blob/main/rfcs/0004-mcp-registry/0004-mcp-registry.md)).
@@ -105,7 +114,22 @@ an MCP server association, is an observable event inside the trace.
 
 # Basic example
 
-TBD.
+```python
+import mlflow
+
+with mlflow.start_span("review") as span:
+    span.link_skill(name="code-review", version=1)
+    result = llm.chat([{"role": "user", "content": "Review this..."}])
+
+traces = mlflow.search_traces(
+    locations=[experiment_id],
+    filter_string="skill = 'code-review/1'",
+)
+```
+
+The first call links the span's trace to version 1 of the registered
+skill and annotates the span as the activation point. The query
+returns every trace in the experiment linked to that version.
 
 ## Motivation
 
@@ -199,10 +223,12 @@ traces it produces to record which registered skill was active.
    span.set_attribute("mlflow.skill.organization", "")
    ```
 
-2. **UI path:** open the trace in the MLflow UI. The trace view shows
-   a "Skills" tab, alongside the existing linked-entity tabs, listing
-   the linked skill versions; each links to the skill's registry
-   detail page. Annotated activation spans show the skill coordinates
+2. **UI path:** open the trace in the MLflow UI. The trace view lists
+   the linked skill versions among the trace's linked entities, each
+   linking to the skill's registry detail page; how linked entities
+   are presented (for example, one consolidated lineage view across
+   prompts, skills, and other assets) is aligned across assets outside
+   this RFC. Annotated activation spans show the skill coordinates
    in the span detail view. When recorded coordinates do not resolve
    (the version was deleted, or the trace came from a different
    workspace), the UI shows a "not found in registry" indicator.
@@ -218,7 +244,7 @@ their code.
    framework in whatever form the framework expects:
    ```python
    path = mlflow.genai.pull(
-       name="code-review", alias="production", destination="./skills",
+       "skills:/code-review@production", destination="./skills",
    )
    agent = build_agent(skills=[path])
    ```
@@ -243,22 +269,23 @@ A platform owner installs skills into a harness such as Claude Code,
 where there is no application code to instrument and no in-process
 resolution step.
 
-1. Install the skill into the harness through MLflow:
+1. Install the skill into the harness by any means (the harness's
+   own installer, a package manager, or a plain copy of the pulled
+   content), then tell MLflow where it landed:
    ```bash
-   mlflow skills install --skill-uri skills:/code-review@production \
-       --harness claude-code
+   mlflow skills track skills:/code-review@production \
+       --path ~/.claude/skills/code-review --harness claude-code
    ```
-   MLflow resolves the alias to a concrete version, delegates the
-   harness-specific install to the configured package manager plugin,
-   and records the resulting harness-local skill name and location
-   against the registry coordinates that were installed. The record
-   maps each installed skill's harness-local name and location to its
-   workspace, organization, name, version, and content digest.
-   Recording this at install time is what makes the linkage survive a
-   package manager that renames or prefixes the skill. Project-scoped
-   installs record this in the project, and user-scoped installs
-   record it in the user's MLflow configuration. When both define the
-   same harness-local skill name, the project entry wins.
+   MLflow resolves the alias to a concrete version, verifies that the
+   content at the path matches the version's registered digest, and
+   writes an install record mapping the harness-local skill name and
+   location to the skill's workspace, organization, name, version,
+   and content digest. Recording this is what makes the linkage
+   survive an installer that renames or prefixes the skill.
+   Project-scoped tracking writes the record in the project, and
+   user-scoped tracking writes it in the user's MLflow configuration.
+   When both define the same harness-local skill name, the project
+   entry wins.
 2. Enable tracing for the harness:
    ```bash
    mlflow autolog claude
@@ -277,8 +304,8 @@ resolution step.
 4. Open the MLflow UI and navigate to the Traces page. Linked skills
    appear on each trace, and annotated spans carry the coordinates.
 
-A skill that was copied into the harness by hand, without an MLflow
-install, has nothing recorded for it and produces no link.
+A skill present in the harness but not tracked has nothing recorded
+for it and produces no link.
 Nothing about the run fails in that case: the agent runs normally,
 other autologging is unaffected, and the developer can still link
 explicitly. The same is true of a missing or unreadable install
@@ -295,8 +322,8 @@ machine, so linkage on this path requires the coordinates to reach
 the server inside the spans themselves. Two routes do that. The
 first is the attribute contract shown in the first journey, set by
 instrumentation on the host that can read the record. The second is
-a best-effort fallback: installation appends a machine-readable
-marker carrying the coordinates to the skill body, and the server
+a best-effort fallback: tracking appends a machine-readable marker
+carrying the coordinates to the skill body, and the server
 recognizes the marker inside captured LLM input at ingestion,
 creating the link only when the marker's coordinates resolve in the
 registry and its digest matches the version's. Marker-derived links
@@ -417,9 +444,9 @@ active.
    mlflow skills set-alias skills:/code-review \
        --alias production --version 2
    ```
-6. **UI path:** the experiment page shows a "Skills" tab listing the
-   skill versions linked from the experiment's traces, following the
-   existing prompts tab. When comparing evaluation runs, the
+6. **UI path:** the experiment page lists the skill versions linked
+   from the experiment's traces alongside its other linked entities,
+   such as prompts. When comparing evaluation runs, the
    comparison view shows a diff of the linked skill versions, so a
    quality change can be read against exactly what changed in the
    skill configuration.
@@ -461,15 +488,228 @@ The benchmark journey above is the controlled complement.
 
 ### Out of scope
 
-TBD.
+- **Installing skills into harnesses.** This RFC records where a skill
+  was installed; it does not perform the installation. An MLflow
+  installer with package manager integration could follow later and
+  would have to write the same install record.
+- **Skill-level cost attribution.** Without a delimited region for a
+  skill's influence, tokens cannot be attributed to a skill. Cost is
+  compared per run across skill versions in the evaluation journeys.
+- **Tracing of non-skill plugin members.** Linking traces to agents,
+  hooks, and other agent plugin members is deferred to
+  [RFC-0010: Extended Agent Plugins](https://github.com/mlflow/rfcs/pull/27),
+  which reuses the mechanism defined here.
+- **Filtering evaluation results by skill directly.** Evaluation
+  results reach skill versions through their traces' links; a direct
+  filter on evaluation results is not added.
+- **Server-side digest verification.** Digests remain client-asserted
+  as in RFC-0008; a verification job with a verified-digest flag is
+  registry-side follow-up work.
 
 # Detailed design
 
-TBD.
+This section is deliberately high level. It fixes the shapes that
+other work depends on (the link, the SDK method, the attribute
+contract, the install record, the query forms) and leaves internals
+to the implementation.
+
+## Link model
+
+A skill link is a lineage record associating a trace with a skill
+version, stored and queried through the same entity-association
+mechanism as prompt links. A record carries:
+
+- the trace id;
+- the skill version's identity: `workspace`, `organization`, `name`,
+  and `version`, with the association id in the URI form
+  `[@organization/]name/version`;
+- a `provenance` value: `explicit` (set by application or
+  OpenTelemetry instrumentation), `resolution` (recorded by a
+  framework autologger from the in-process mapping), `install_record`
+  (recorded by a harness autologger from the install record), or
+  `content_marker` (inferred by the server from a marker in captured
+  LLM input).
+
+There is at most one record per trace and skill version. When more
+than one route produces the same link, the record keeps the more
+authoritative provenance; `content_marker` is the least
+authoritative, and the other three are treated as equal.
+
+Independently of the record, the span on which activation was
+observed is annotated with the attributes below, and tool spans that
+use a skill's bundled files are annotated with the same attributes
+plus `mlflow.skill.role = "usage"`. Annotation is for inspection in
+the trace view; it is not a query path.
+
+## SDK method and attribute contract
+
+```python
+class Span:
+    def link_skill(
+        self,
+        *,
+        name: str,
+        version: int | None = None,
+        alias: str | None = None,
+        organization: str = "",
+        cache_ttl_seconds: float | None = None,
+    ) -> None: ...
+```
+
+Exactly one of `version` and `alias` is given. An alias is resolved
+through the registry and the concrete version is what the link
+records. Alias resolutions are cached per process with a short
+expiry, following the prompt registry's alias cache: the default TTL
+comes from `MLFLOW_ALIAS_SKILL_CACHE_TTL_SECONDS` (60 seconds), a
+per-call `cache_ttl_seconds` overrides it, and `0` bypasses the
+cache. The workspace is the caller's current workspace context. The
+method writes the annotation attributes on the span and the lineage
+record on the span's trace with provenance `explicit`.
+
+Instrumentation that does not use the MLflow SDK sets the same
+attributes directly, and MLflow creates the lineage record from them
+when it receives the span:
+
+| Attribute | Value |
+|---|---|
+| `mlflow.skill.name` | registered skill name |
+| `mlflow.skill.version` | registered version (integer) |
+| `mlflow.skill.workspace` | workspace name |
+| `mlflow.skill.organization` | organization, empty string when none |
+| `mlflow.skill.digest` | content digest, when known |
+| `mlflow.skill.role` | `activation` (default) or `usage` |
+
+These names are a public contract. Whether they should live in a
+vendor-neutral namespace is an open question.
+
+## Queries
+
+The `skill` filter on `search_traces` matches lineage records by
+exact match, following the `prompt` filter:
+
+- `skill = 'code-review/1'`: one version;
+- `skill = '@acme/code-review/1'`: one version in a named
+  organization;
+- `skill = 'code-review'`: any version of the skill;
+- `skill.provenance = 'install_record'`: qualifies by provenance, for
+  example to exclude `content_marker` links from an exposure count.
+
+Digest queries resolve through the registry: RFC-0008's digest index
+yields the versions sharing a digest, and the trace query covers
+those versions.
+
+## Install record
+
+The install record maps skills installed in a harness to registry
+coordinates. It is written by `mlflow skills track` and read by the
+harness autologger. The project-scoped record is `mlflow-skills.json`
+at the project root; the user-scoped record has the same name in the
+MLflow user configuration directory. A project entry takes precedence
+over a user entry with the same harness-local name.
+
+```json
+{
+  "record_version": 1,
+  "tracking_uri": "https://mlflow.example.com",
+  "skills": {
+    "code-review": {
+      "harness": "claude-code",
+      "path": "/home/dev/.claude/skills/code-review",
+      "workspace": "default",
+      "organization": "",
+      "name": "code-review",
+      "version": 3,
+      "digest": "sha256:..."
+    }
+  }
+}
+```
+
+`mlflow skills track <skill-uri> --path <dir> --harness <name>
+[--user]` resolves the URI (aliases are resolved and never stored),
+verifies the content at the path against the version's registered
+digest and refuses on mismatch, appends the content marker to the
+skill body, and writes the entry. `mlflow skills untrack` removes an
+entry. The record contains no credentials; the tracking URI is
+recorded so that a reader knows which registry the coordinates refer
+to.
+
+## Autologger behavior
+
+**Harnesses with MLflow-provided tracing** (Claude Code, Codex, Qwen
+Code, OpenCode). The autologger loads the install records, then for
+each skill activation it observes in the recorded conversation it
+validates the installed content against the recorded digest (the
+result is cached locally), and on success annotates the activation
+span and writes the lineage record with provenance `install_record`.
+Activations are recognized by the harness's own signals where they
+exist (a dedicated skill tool call, a slash-command invocation) and
+otherwise by a tool call that reads a tracked skill's `SKILL.md`.
+Tool calls whose inputs reference paths under a tracked skill's
+directory are annotated as usage. On a digest mismatch the autologger
+logs an error and records nothing for that skill. A missing or
+unreadable record disables linking and nothing else.
+
+**Agent frameworks with MLflow autologgers.** `mlflow.genai.pull`
+accepts a skill URI (`skills:/name@alias` or `skills:/name/version`)
+as its first argument, so the call's shape names the entity, in
+addition to the keyword form RFC-0008 specifies, which is retained
+because it is already being implemented. Either form records, in
+process, the mapping from each pulled skill's location to its
+coordinates and digest. The framework autologger consults that
+mapping when it observes an activation (a skill-loading tool call, or
+a read of a pulled `SKILL.md`), annotates the span, and writes the
+record with provenance `resolution`. Frameworks that MLflow traces
+only by receiving their OpenTelemetry output are handled as
+receivers below.
+
+**OpenTelemetry receivers** (Gemini CLI, Goose, OpenHands, Google
+ADK). At ingestion, a received span carrying the attribute contract
+produces a lineage record with provenance `explicit`. As a fallback,
+the server scans captured LLM input for the content marker
+(`<!-- mlflow-skill: {...} -->` as the last line of a tracked skill's
+body) and produces a record with provenance `content_marker` only if
+the marker's coordinates resolve in the registry and its digest
+matches the version's. Markers are matched only in LLM input, never
+in output, and duplicate matches within a trace produce one record.
+This route works only when the harness captures LLM content in its
+spans. Digest verification everywhere excludes the marker line from
+hashing.
+
+## UI
+
+These are the surfaces the journeys need. How linked entities are
+presented (for example, one consolidated lineage view across
+prompts, skills, and other assets rather than a tab per asset type)
+is aligned across assets outside this RFC.
+
+- Trace view: linked skill versions listed among the trace's linked
+  entities, each linking to its registry detail page; annotated spans
+  show the coordinates in the span detail; unresolvable coordinates
+  show a "not found in registry" indicator.
+- Skill and version detail pages: a "Related traces" link opening
+  the Traces page filtered by that skill or version.
+- Experiment page: skill versions linked from the experiment's traces
+  listed alongside its other linked entities.
+- Run comparison: a diff of linked skill versions alongside the
+  metric deltas.
 
 # Drawbacks
 
-TBD.
+- **A manual tracking step for harness users.** Without an MLflow
+  installer, each installed skill must be tracked once by hand. Digest
+  verification at tracking time keeps this honest, but it is a step
+  users can forget, and untracked skills are silently unlinked.
+- **The marker mutates installed content.** Appending a marker to
+  `SKILL.md` changes the file on disk and requires every digest check
+  to exclude that line. It is also visible to the model, and the
+  fallback depends on harness telemetry settings that are commonly
+  off by default.
+- **Alias links can lag a repoint** for up to the cache TTL, the same
+  trade-off prompt aliases make.
+- **A public attribute contract** commits MLflow to the
+  `mlflow.skill.*` names for as long as non-MLflow instrumentation
+  writes them.
 
 # Alternatives
 
@@ -486,11 +726,42 @@ of the session. Parenting spans under a SKILL span therefore asserts
 a containment the instrumentation cannot accurately record, and it
 cannot represent concurrent activations.
 
-Other alternatives TBD.
+## Attribute-based search instead of lineage records
+
+Querying traces by span attributes was considered and rejected. Span
+attributes are stored inside serialized span content, and the
+existing attribute filter is substring matching over that content,
+which cannot give the exact-match semantics an adoption or exposure
+count needs; structured attribute search would be new store work for
+a worse result than the lineage mechanism prompt links already use.
+
+## A module-level linking call
+
+A module-level `mlflow.genai.link_skill()` acting on the current
+trace and span was considered and rejected in favor of the span
+method, because a module-level call in the `genai` namespace does not
+say whether it links a trace, a span, or an active evaluation run.
+
+## An MLflow installer in this RFC
+
+Specifying harness installation and package manager integration here
+was considered and rejected. It would re-open the installation design
+that RFC-0008 deferred, inside a tracing RFC, and the install record
+plus a tracking command give the autologger what it needs without it.
 
 # Adoption strategy
 
-TBD.
+New feature, not a breaking change. Existing traces are unaffected;
+existing framework autologgers gain skill linking without user
+changes once a skill is resolved through `mlflow.genai.pull`. This
+RFC delivers `Span.link_skill`, the attribute contract, lineage
+records and the `skill` filter, the install record and `mlflow
+skills track`, skill recognition in the Claude Code, Codex, Qwen
+Code, and OpenCode tracing integrations and in framework
+autologgers, attribute and marker recognition at OpenTelemetry
+ingestion, and the UI surfaces above. RFC-0010 reuses the link model
+for non-skill plugin members. An MLflow installer that writes the
+install record is possible follow-on work but not committed.
 
 # Open questions
 
@@ -500,22 +771,6 @@ TBD.
   of the public contract rather than an implementation detail. Is
   that the right trade, and should the attribute names be namespaced
   differently if they are to be set by non-MLflow instrumentation?
-- **Installation scope.** Automatic instrumentation for harnesses
-  requires an install-time record connecting harness-local skills to
-  registry coordinates, and this RFC currently brings harness
-  installation commands and package manager integration into scope to
-  produce it. That is a large undertaking in its own right, and it is
-  worth asking whether this RFC should carry it. A narrower
-  alternative would be a command that only activates tracing: the
-  user installs the skill into the harness however they choose, then
-  tells MLflow which registry coordinates the installed skill
-  corresponds to, and MLflow writes the record without performing or
-  managing the installation. That keeps the tracing linkage while
-  leaving installation to the user, at the cost of an extra manual
-  step and the risk that the declared coordinates do not match what
-  was actually installed. Should this RFC include full installation,
-  only the tracing-activation command, or the activation command now
-  with installation as follow-on work?
 - **Digest-based linking.** Digest queries resolve through the
   registry: RFC-0008 indexes a skill's versions by content digest, so
   grouping traces by content is a registry lookup followed by a trace
