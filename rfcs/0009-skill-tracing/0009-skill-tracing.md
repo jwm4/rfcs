@@ -105,9 +105,8 @@ this RFC specifies that record and the command that writes it for a
 skill the user has installed by whatever means they choose. It does
 not specify an MLflow installer or package manager integration; an
 installer could follow later and would have to produce the same
-record. Skill
-linking follows the same lineage-record pattern as prompt
-linking and the MCP Server Registry's trace linking
+record. Skill linking follows the same lineage-record pattern as
+prompt linking and the MCP Server Registry's trace linking
 ([RFC-0004](https://github.com/mlflow/rfcs/blob/main/rfcs/0004-mcp-registry/0004-mcp-registry.md)).
 It adds activation-span annotation because skill activation, unlike
 an MCP server association, is an observable event inside the trace.
