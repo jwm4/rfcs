@@ -762,9 +762,14 @@ rejection.
   access endpoint leads to a live endpoint whose protocol
   describes the rest, an Agent Card in one case and the MCP
   handshake in the other. The second half is a gateway concern:
-  routing requests,
-  choosing among live instances by health or load, and mediating
-  authentication are not registry functions.
+  routing requests, choosing among live instances by health or
+  load, and mediating authentication are not registry functions.
+- **Cross-referencing MCP Server Registry entries from `mcp`
+  endpoints.** An agent exposed as an MCP server records its `mcp`
+  endpoint on its own record. The same server may also be
+  registered in the MCP Server Registry, and nothing links the two
+  for now; linking them is a possible later addition if the
+  duplication turns out to matter.
 - **Cost attribution.** Per-agent token cost is an observability
   rollup over agent-linked traces, not registry metadata.
 - **Cross-workspace federation.** Discovery across registries is
@@ -924,12 +929,21 @@ supply it truthfully, and forcing a declaration would invite
 invented BOMs that pollute cross-registry queries. An absent BOM is
 recorded as *undeclared* composition rather than an empty
 dependency list: the registry knows the agent's claim surface, not
-its contents.
+its contents. Such a record is as thin as it sounds, name,
+description, and endpoint, and nothing more is required to promote
+it to `active`: whether a black-box agent is fit for use is a
+judgment the vetting journey's evaluations inform, not a schema
+gate.
 
 **Endpoints are separate records, not version fields.** Some agents
 are reachable at a URL (A2A agents inherently; deployed agents
 generally), and recording that URL lets the registry drive tracing
-and evaluation for agents whose code the user cannot run. But
+and evaluation for agents whose code the user cannot run. It is
+also what lets MLflow be the glue between the many systems that
+define and serve agents: the registry is authoritative about which
+agents exist and where each is reached, while those systems stay
+authoritative about running them, and the registry persists no
+runtime state. But
 endpoints change independently of composition, and agent versions
 are immutable. Following the MCP Server Registry's access endpoint
 model (`MCPAccessEndpoint` in the implementation; the RFC text
@@ -1003,40 +1017,6 @@ TBD.
   default is chosen, users who want the other behavior override it
   per deployment, so the question is which behavior makes the better
   default, not which is possible.
-
-- **How thin may an interface-only record be?** A black-box A2A
-  agent registers with a name, metadata imported from its card, an
-  access endpoint, undeclared composition, and no definitional
-  anchor. Is that enough of a record to be worth governing, and
-  should the registry require anything more of it before such a
-  record can be promoted to `active`?
-
-- **Should agent-centric traces and evaluations be a separate RFC?**
-  The experiments bridge (`agent_id` resolving to a default
-  experiment) touches tracing APIs, evaluation APIs, and UI surface
-  area well beyond the registry itself, and there is precedent for
-  splitting: RFC-0008 defined the Skill Registry and RFC-0009
-  followed with skill tracing. The counter-argument is that
-  agent-anchored traces and evals are the registry's core value; a
-  registry without them is a list of names. This RFC keeps the
-  journey in scope on the additive framing above, but if reviewers
-  prefer a narrower registry RFC, the journey splits cleanly along
-  the RFC-0008/0009 seam.
-
-- **Do endpoint records belong in MLflow at all?** The access endpoint
-  model resolves the mechanical objections to endpoints (mutability
-  against immutable versions, staleness on version records), and
-  RFC-0004 sets the precedent. The remaining objection is
-  architectural: an endpoint could be considered runtime metadata, and
-  the record/runtime boundary could place all of it on the platform
-  side. The position taken here is that "where an approved endpoint
-  for this agent is" belongs to the record, while "whether anything
-  answers there" belongs to the platform, and that without endpoints
-  the registry cannot trace or evaluate agents whose code the user
-  cannot run. This boundary needs explicit review. A related
-  sub-question: when an agent is exposed as an MCP server, should an
-  `mcp` endpoint cross-reference the MCP Registry entry for the same
-  endpoint instead of duplicating it?
 
 - **How should harness-based agents be described?** Agents that run
   as configurations of a packaged harness (Claude Code, OpenCode,
