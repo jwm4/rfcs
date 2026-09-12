@@ -165,6 +165,18 @@ mlflow.genai.register_agent(
 )
 ```
 
+Or, from a checkout of that configuration, let MLflow propose the
+registration:
+
+```bash
+uvx mlflow@latest agent register --organization acme --name oncall-helper
+```
+
+The command scans the tree, shows the skills, MCP servers, models,
+and prompts it found and which registry entries they match,
+registers the agent after confirmation, and writes a coordinates
+file back into the tree (the scan path in the register journey).
+
 There is no agent code of the user's own: the agent is the harness
 plus its configuration, so the source pointer points at the
 configuration and serves as the definitional anchor. Any of the
@@ -337,6 +349,28 @@ the record.
    skill directories or MCP server definitions, stays out, because
    an embedded copy is invisible to cross-registry queries and can
    drift from the declared references.
+7. **Scan path:** from the agent's source tree, `mlflow agent
+   register` (also `uvx mlflow@latest agent register`, alongside the
+   existing `agent setup`) scans the tree and proposes a BOM. The
+   scan is exact for MLflow's own footprints: the Skill Registry's
+   resolution lock file and any `skills:/`, `prompts:/`, `models:/`,
+   or `mcp-servers:/` references in code or configuration. It is
+   best-effort for harness-native configuration, such as MCP server
+   declarations in a harness's settings file, through per-harness
+   adapters scoped to the well-known harness list; a generic mode
+   finds only the exact layer. The registrant reviews the proposal,
+   with matched registry entries and unmatched findings shown
+   apart, and confirms or edits it. Unmatched skills and MCP servers
+   can be registered on the spot through the Skill Registry's
+   import adapters and the MCP Server Registry's create path, so
+   the references resolve; the agent and its version are then
+   registered with the source pointer set to the tree's Git remote
+   and commit. Finally the command writes a coordinates file into
+   the tree recording the agent's coordinates and its resolved BOM
+   (the form described in Design positions), so the next version
+   registration and any later scan are exact. The file format is
+   shared with the resolution lock the Skill Registry work defers
+   to a separate RFC and is specified there.
 
 The harness path is the newest part of this design and the least
 settled (see [Open questions](#open-questions)). For framework-built
@@ -822,6 +856,22 @@ Registry, Model Registry, and Prompt Registry when matching entries
 exist, and they remain valid when they do not. This makes
 cross-registry questions ("which agents use skill X?") answerable
 as registry queries without constraining registration order.
+
+**A version's BOM is exported in resolved form.** The soft
+references are what the registry stores; integrating systems
+usually want the expansion. The registry therefore serves any
+version's BOM as a JSON document in which each reference that
+matches a registry entry is expanded to that entry's record (a
+skill version, an MCP server version with its server definition, a
+prompt version with its text, a registry model version) and each
+that does not is kept as the pointer and marked unresolved. Aliases
+are pinned to the concrete version at export time, and the document
+records when it was resolved, since aliases move. Agent plugins are
+expanded to their members, and agents the version calls are
+resolved one level, with nested BOMs reachable by repeating the
+call. The SDK and REST API expose this as an option on fetching a
+version, and it is the same document the scan path writes back
+into a source tree.
 
 **The BOM is a component inventory, not a complete recipe.** Its
 structured axes exist because corresponding registries or identifier
