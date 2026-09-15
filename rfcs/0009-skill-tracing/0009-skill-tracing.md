@@ -29,7 +29,6 @@
 - [Drawbacks](#drawbacks)
 - [Alternatives](#alternatives)
 - [Adoption strategy](#adoption-strategy)
-- [Open questions](#open-questions)
 
 # Summary
 
@@ -389,9 +388,10 @@ affected version.
 When the same content has been re-imported under several version
 numbers, the affected traces span all of those versions. RFC-0008
 indexes a skill's versions by content digest, so a registry lookup by
-digest yields every version that shares the content, and the trace
-query then covers those versions (see
-[Open questions](#open-questions) on digest-based linking).
+digest yields every version of that skill that shares the content,
+and the trace query then covers those versions. Extending the
+grouping across skill names is follow-on work that reuses the
+cross-name lookup this RFC adds.
 
 The evidence is retrospective: it shows what has run, not what is
 installed and idle. A consumer that has the version installed but has
@@ -569,8 +569,9 @@ when it receives the span:
 | `mlflow.skill.digest` | content digest, when known |
 | `mlflow.skill.role` | `activation` (default) or `usage` |
 
-These names are a public contract. Whether they should live in a
-vendor-neutral namespace is an open question.
+These names are a public contract. No OpenTelemetry semantic
+convention for skills exists today; if one is defined later, MLflow
+can map it to these attributes without changing the contract.
 
 ## Queries
 
@@ -619,8 +620,9 @@ file it owns.
 
 Step 3 requires a registry lookup by digest across skill names.
 RFC-0008 indexes digests within a skill name, so this lookup is a
-small registry addition delivered with this RFC, and it is the same
-capability the cross-name grouping open question concerns.
+small registry addition delivered with this RFC, and the same
+capability can later serve digest-based trace grouping across skill
+names.
 
 The harness integrations must implement the digest rule identically
 to the Python SDK; RFC-0008 defines the rule deterministically, and
@@ -716,8 +718,13 @@ UI specification.
 - **The marker mutates pulled content.** Appending a marker to
   `SKILL.md` changes the file on disk and requires the digest rule to
   exclude that line. It is also visible to the model, it covers only
-  content pulled through MLflow, and the fallback depends on harness
-  telemetry settings that are commonly off by default.
+  content pulled through MLflow, and the fallback works only when the
+  harness includes LLM message content in its telemetry, which is a
+  separate setting from tracing itself and is off by default in the
+  OpenTelemetry GenAI conventions. In practice this limits little:
+  users who send traces to MLflow to understand agent behavior
+  generally enable content capture as well, since prompts and
+  responses are most of what they want to see.
 - **Alias links can lag a repoint** for up to the cache TTL, the same
   trade-off prompt aliases make.
 - **A public attribute contract** commits MLflow to the
@@ -778,19 +785,5 @@ marker written by `pull`, skill recognition in the Claude Code, Codex,
 Qwen Code, and OpenCode tracing integrations and in framework
 autologgers, attribute and marker recognition at OpenTelemetry
 ingestion, and the UI content above. RFC-0010 reuses the link model
-for non-skill plugin members.
-
-# Open questions
-
-- **OTel alignment.** The explicit journey shows a plain
-  OpenTelemetry path that sets `mlflow.skill.*` attributes, from
-  which MLflow records the link. That makes the attribute names part
-  of the public contract rather than an implementation detail. Is
-  that the right trade, and should the attribute names be namespaced
-  differently if they are to be set by non-MLflow instrumentation?
-- **Digest lookup across skill names.** Identifying installed skills
-  by digest needs a registry lookup by digest across skill names, and
-  RFC-0008 indexes digests only within a name. This RFC adds that
-  lookup. Should the same capability also power digest-based trace
-  grouping across names (the impact journey), and does the
-  client-asserted nature of the digest limit either use?
+for non-skill plugin members. Digest-based trace grouping across
+skill names is deferred to follow-on work.
